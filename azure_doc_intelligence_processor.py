@@ -37,7 +37,7 @@ class AzureDocIntelligenceProcessor:
         
         poller = self.client.begin_analyze_document(
             model_id=self.model_id,
-            analyze_request=pdf_bytes,
+            body=pdf_bytes,
             content_type="application/pdf"
         )
         result: AnalyzeResult = poller.result()
@@ -57,7 +57,7 @@ class AzureDocIntelligenceProcessor:
         request = AnalyzeDocumentRequest(url_source=pdf_url)
         poller = self.client.begin_analyze_document(
             model_id=self.model_id,
-            analyze_request=request
+            body=request
         )
         result: AnalyzeResult = poller.result()
         
