@@ -1,0 +1,6 @@
+azure-storage-blob>=12.14.0
+azure-ai-documentintelligence>=1.0.0
+pytesseract>=0.3.10
+PyMuPDF>=1.23.0
+Pillow>=9.5.0
+python-dotenv>=1.0.0
