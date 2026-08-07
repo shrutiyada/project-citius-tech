@@ -1,0 +1,18 @@
+# 1. Azure Blob Storage
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=your_account_name;AccountKey=your_account_key;EndpointSuffix=core.windows.net
+AZURE_CONTAINER_NAME_PATIENT=patient-records
+AZURE_CONTAINER_NAME_POLICY=medical-policies
+
+# 2. Azure Document Intelligence
+AZURE_DOC_INTEL_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com/
+AZURE_DOC_INTEL_KEY=your_azure_doc_intelligence_key
+AZURE_DOC_INTEL_MODEL=prebuilt-layout
+
+# 3. OpenAI 
+OPENAI_API_KEY=sk-proj-your-openai-key-here
+
+# 4. Azure AI Search (Knowledge Base)
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_KEY=your_admin_api_key
+AZURE_SEARCH_INDEX_PATIENT=patient-auth-index
+AZURE_SEARCH_INDEX_POLICY=medical-policy-index
