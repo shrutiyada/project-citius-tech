@@ -1,109 +1,34 @@
-# Azure Blob PDF Processing: Tesseract OCR vs. Azure Document Intelligence
+# Automated Prior Auth Decision Engine
 
-Python pipeline to list & download scanned PDF files from an Azure Blob Storage folder, extract page text, lines, tables, and structured data, and output the results as a JSON file.
+This is a decoupled AI system with a **FastAPI backend** and a **Streamlit frontend**.
 
-Supports **two processing engines**:
-1. **Tesseract OCR (Local & Free)**
-2. **Azure Document Intelligence (AI Cloud)**
+## Architecture
+1. **Patient Pipeline**: Extracts patient diagnoses and requested procedures, masking all PHI. Stores in `patient-auth-index`.
+2. **Policy Pipeline**: Extracts medical criteria, exclusions, and covered CPT codes. Stores in `medical-policy-index`.
+3. **Reasoning Agent**: Evaluates the patient history against the medical policy for a specific CPT code to generate an APPROVE/DENY/PEND decision.
 
----
+## Setup
 
-## 1. Environment Setup
-
-### Install Dependencies
+1. Copy `.env.example` to `.env` and fill in your keys.
+2. Activate your environment:
 ```bash
-cd /Users/shrutiyadav/.gemini/antigravity/scratch/azure_pdf_ocr
-python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 ```
 
-### Configure `.env` Credentials
-Copy `.env.example` to `.env` and fill in your keys:
+## How to Run
+
+You need two terminal windows open to run the decoupled architecture.
+
+**Terminal 1: Start the FastAPI Backend**
 ```bash
-cp .env.example .env
+source venv/bin/activate
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
 ```
+(You can view the interactive API docs at `http://localhost:8000/docs`)
 
-Set variables inside `.env`:
-```env
-# 1. Azure Blob Storage Credentials
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
-AZURE_CONTAINER_NAME=your_container
-AZURE_BLOB_FOLDER_PREFIX=axure_blob_folder/
-
-# 2. Azure Document Intelligence (Optional - for AI OCR)
-AZURE_DOC_INTEL_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
-AZURE_DOC_INTEL_KEY=your_secret_key
-AZURE_DOC_INTEL_MODEL=prebuilt-layout
-
-# 3. Tesseract Settings (Local OCR)
-OCR_LANGUAGE=eng
-OCR_DPI=300
-```
-
----
-
-## 2. How to Run
-
-### Option A: Run Azure Document Intelligence (Recommended for AI Accuracy & Tables)
+**Terminal 2: Start the Streamlit Frontend**
 ```bash
-python main_azure_doc_intel.py
+source venv/bin/activate
+streamlit run app.py
 ```
-
-### Option B: Run Tesseract OCR (Free / Local)
-```bash
-python main.py
-```
-
-### Option C: Test a Local PDF File
-```bash
-# Test local PDF using Azure Document Intelligence
-python test_azure_doc_intel.py path/to/sample.pdf
-
-# Test local PDF using Tesseract OCR
-python test_local_ocr.py path/to/sample.pdf
-```
-
----
-
-## 3. How the Output JSON is Saved
-
-Both scripts generate structured JSON files saved under the `output/` directory (e.g. `output/azure_doc_intel_text.json` or `output/extracted_text.json`).
-
-### Azure Document Intelligence JSON Structure:
-```json
-[
-    {
-        "filename": "axure_blob_folder/scanned_invoice.pdf",
-        "model_used": "prebuilt-layout",
-        "full_content": "Invoice #1042\nDate: 2026-08-04...",
-        "total_pages": 1,
-        "pages": [
-            {
-                "page_number": 1,
-                "lines": [
-                    { "text": "Invoice #1042" },
-                    { "text": "Date: 2026-08-04" }
-                ]
-            }
-        ],
-        "tables": [
-            {
-                "table_id": 1,
-                "row_count": 3,
-                "column_count": 2,
-                "cells": [
-                    { "row_index": 0, "column_index": 0, "content": "Item" },
-                    { "row_index": 0, "column_index": 1, "content": "Price" },
-                    { "row_index": 1, "column_index": 0, "content": "Service Fee" },
-                    { "row_index": 1, "column_index": 1, "content": "$150.00" }
-                ]
-            }
-        ],
-        "key_value_pairs": [
-            { "key": "Invoice Number", "value": "1042" },
-            { "key": "Total Due", "value": "$150.00" }
-        ]
-    }
-]
-```
+This will automatically open your web browser to the UI!
