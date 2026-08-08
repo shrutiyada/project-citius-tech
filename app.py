@@ -4,6 +4,12 @@ import requests
 st.set_page_config(page_title="Prior Auth Decision Engine", layout="wide")
 API_URL = "http://localhost:8000"
 
+# Initialize Session State
+if "patient_id" not in st.session_state:
+    st.session_state.patient_id = ""
+if "policy_id" not in st.session_state:
+    st.session_state.policy_id = ""
+
 st.title("🏥 Automated Prior Auth Decision Engine")
 
 tab1, tab2 = st.tabs(["Prior Auth Pipeline", "Medical Assistant Chat"])
@@ -12,27 +18,37 @@ with tab1:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.header("1. Upload Patient Record")
-        patient_file = st.file_uploader("Upload Patient PDF", type=["pdf"])
-        if st.button("Process Patient Record") and patient_file:
-            with st.spinner("Uploading & Processing via Azure..."):
-                files = {"file": (patient_file.name, patient_file.getvalue(), "application/pdf")}
-                res = requests.post(f"{API_URL}/upload/patient", files=files)
+        st.header("1. Upload Patient Record(s)")
+        p_id_input = st.text_input("Patient Profile ID", placeholder="e.g. PATIENT-123", key="upload_p_id")
+        patient_files = st.file_uploader("Upload Patient PDF(s)", type=["pdf"], accept_multiple_files=True)
+        
+        if st.button("Process Patient Record(s)") and patient_files and p_id_input:
+            with st.spinner(f"Uploading & Processing {len(patient_files)} files via Azure..."):
+                files_payload = [("files", (f.name, f.getvalue(), "application/pdf")) for f in patient_files]
+                data = {"patient_id": p_id_input}
+                
+                res = requests.post(f"{API_URL}/upload/patient", files=files_payload, data=data)
                 if res.status_code == 200:
-                    st.success(f"Indexed as: {patient_file.name}")
+                    st.success(f"Successfully processed {len(patient_files)} documents for {p_id_input}")
+                    st.session_state.patient_id = p_id_input
                     st.json(res.json().get("entities", {}))
                 else:
-                    st.error("Error processing patient file.")
+                    st.error("Error processing patient files.")
 
     with col2:
         st.header("2. Upload Medical Policy")
+        pol_id_input = st.text_input("Policy ID", placeholder="e.g. POLICY-AETNA-99213", key="upload_pol_id")
         policy_file = st.file_uploader("Upload Policy PDF", type=["pdf"])
-        if st.button("Process Medical Policy") and policy_file:
+        
+        if st.button("Process Medical Policy") and policy_file and pol_id_input:
             with st.spinner("Extracting Policy Criteria..."):
                 files = {"file": (policy_file.name, policy_file.getvalue(), "application/pdf")}
-                res = requests.post(f"{API_URL}/upload/policy", files=files)
+                data = {"policy_id": pol_id_input}
+                
+                res = requests.post(f"{API_URL}/upload/policy", files=files, data=data)
                 if res.status_code == 200:
-                    st.success(f"Indexed as: {policy_file.name}")
+                    st.success(f"Successfully indexed Policy {pol_id_input}")
+                    st.session_state.policy_id = pol_id_input
                     st.json(res.json().get("entities", {}))
                 else:
                     st.error("Error processing policy file.")
@@ -42,16 +58,16 @@ with tab1:
     st.header("3. Run Prior Auth Review (with Critique)")
     c1, c2, c3 = st.columns(3)
     with c1:
-        p_id = st.text_input("Patient Document ID", placeholder="e.g. patient_record.pdf", key="p_id_eval")
+        p_id_eval = st.text_input("Patient Document ID", value=st.session_state.patient_id, key="p_id_eval")
     with c2:
-        pol_id = st.text_input("Policy Document ID", placeholder="e.g. policy.pdf", key="pol_id_eval")
+        pol_id_eval = st.text_input("Policy Document ID", value=st.session_state.policy_id, key="pol_id_eval")
     with c3:
         cpt = st.text_input("Requested CPT Code", placeholder="e.g. 99213")
 
     if st.button("Evaluate Prior Auth Decision", type="primary"):
-        if p_id and pol_id and cpt:
+        if p_id_eval and pol_id_eval and cpt:
             with st.spinner("AI Reviewing Medical Necessity Criteria and Auditing Decision..."):
-                params = {"patient_id": p_id, "policy_id": pol_id, "target_cpt": cpt}
+                params = {"patient_id": p_id_eval, "policy_id": pol_id_eval, "target_cpt": cpt}
                 res = requests.post(f"{API_URL}/evaluate", params=params)
                 
                 if res.status_code == 200:
@@ -88,9 +104,9 @@ with tab2:
     
     colA, colB = st.columns(2)
     with colA:
-        chat_p_id = st.text_input("Patient Document ID", placeholder="patient_record.pdf", key="p_id_chat")
+        chat_p_id = st.text_input("Patient Document ID", value=st.session_state.patient_id, key="p_id_chat")
     with colB:
-        chat_pol_id = st.text_input("Policy Document ID", placeholder="policy.pdf", key="pol_id_chat")
+        chat_pol_id = st.text_input("Policy Document ID", value=st.session_state.policy_id, key="pol_id_chat")
         
     st.divider()
     
@@ -103,7 +119,7 @@ with tab2:
             
     if prompt := st.chat_input("Ask a question about the policy or patient..."):
         if not chat_p_id or not chat_pol_id:
-            st.error("Please enter both a Patient ID and Policy ID above to chat with the data.")
+            st.error("Please ensure Patient ID and Policy ID are filled in above.")
         else:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
