@@ -7,6 +7,7 @@ from phi_masker import PHIMasker
 from patient_agent import PatientEntityAgent
 from policy_agent import PolicyEntityAgent
 from reasoning_agent import PriorAuthReasoningAgent
+from chat_agent import ChatAgent
 from azure_kb_indexer import AzureKBIndexer
 
 app = FastAPI(title="Prior Auth Decision Engine API")
@@ -18,9 +19,24 @@ if not Config.validate_all():
 blob_handler = AzureBlobHandler(Config.AZURE_STORAGE_CONNECTION_STRING)
 doc_intel = AzureDocIntelligenceProcessor(Config.AZURE_DOC_INTEL_ENDPOINT, Config.AZURE_DOC_INTEL_KEY)
 phi_masker = PHIMasker()
-patient_agent = PatientEntityAgent(Config.OPENAI_API_KEY)
-policy_agent = PolicyEntityAgent(Config.OPENAI_API_KEY)
-reasoning_agent = PriorAuthReasoningAgent(Config.OPENAI_API_KEY)
+
+# Initialize Agents with Azure OpenAI
+patient_agent = PatientEntityAgent(
+    Config.AZURE_OPENAI_ENDPOINT, Config.AZURE_OPENAI_API_KEY, 
+    Config.AZURE_OPENAI_DEPLOYMENT_NAME, Config.AZURE_OPENAI_API_VERSION
+)
+policy_agent = PolicyEntityAgent(
+    Config.AZURE_OPENAI_ENDPOINT, Config.AZURE_OPENAI_API_KEY, 
+    Config.AZURE_OPENAI_DEPLOYMENT_NAME, Config.AZURE_OPENAI_API_VERSION
+)
+reasoning_agent = PriorAuthReasoningAgent(
+    Config.AZURE_OPENAI_ENDPOINT, Config.AZURE_OPENAI_API_KEY, 
+    Config.AZURE_OPENAI_DEPLOYMENT_NAME, Config.AZURE_OPENAI_API_VERSION
+)
+chat_agent = ChatAgent(
+    Config.AZURE_OPENAI_ENDPOINT, Config.AZURE_OPENAI_API_KEY, 
+    Config.AZURE_OPENAI_DEPLOYMENT_NAME, Config.AZURE_OPENAI_API_VERSION
+)
 
 patient_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_PATIENT)
 policy_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_POLICY)
@@ -70,8 +86,25 @@ async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str):
     patient_data = patient_doc.get("entities_metadata", "")
     policy_data = policy_doc.get("entities_metadata", "")
     
-    decision = reasoning_agent.evaluate(patient_data, policy_data, target_cpt)
+    decision = await reasoning_agent.evaluate(patient_data, policy_data, target_cpt)
     return {"decision": decision}
+
+from pydantic import BaseModel
+class ChatRequest(BaseModel):
+    query: str
+    patient_id: str
+    policy_id: str
+
+@app.post("/chat")
+async def chat_assistant(request: ChatRequest):
+    patient_doc = patient_kb.get_document(request.patient_id)
+    policy_doc = policy_kb.get_document(request.policy_id)
+    
+    patient_data = patient_doc.get("entities_metadata", "") if patient_doc else "No patient data found."
+    policy_data = policy_doc.get("entities_metadata", "") if policy_doc else "No policy data found."
+    
+    response = await chat_agent.answer_question(request.query, patient_data, policy_data)
+    return {"response": response}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
