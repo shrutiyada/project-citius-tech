@@ -11,6 +11,7 @@ from policy_agent import PolicyEntityAgent
 from reasoning_agent import PriorAuthReasoningAgent
 from chat_agent import ChatAgent
 from azure_kb_indexer import AzureKBIndexer
+from openai import AzureOpenAI
 
 app = FastAPI(title="Prior Auth Decision Engine API")
 
@@ -21,6 +22,12 @@ if not Config.validate_all():
 blob_handler = AzureBlobHandler(Config.AZURE_STORAGE_CONNECTION_STRING)
 doc_intel = AzureDocIntelligenceProcessor(Config.AZURE_DOC_INTEL_ENDPOINT, Config.AZURE_DOC_INTEL_KEY)
 phi_masker = PHIMasker()
+
+whisper_client = AzureOpenAI(
+    api_key=Config.AZURE_OPENAI_API_KEY,
+    api_version=Config.AZURE_OPENAI_API_VERSION,
+    azure_endpoint=Config.AZURE_OPENAI_ENDPOINT
+)
 
 # Initialize Agents with Azure OpenAI
 patient_agent = PatientEntityAgent(
@@ -83,7 +90,7 @@ async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)
     return {"message": f"Policy {policy_id} indexed.", "entities": entities}
 
 @app.post("/evaluate")
-async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str):
+async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str, human_feedback: str = None):
     patient_doc = patient_kb.get_document(patient_id)
     policy_doc = policy_kb.get_document(policy_id)
     
@@ -104,7 +111,7 @@ async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str):
     else:
         policy_data = json.dumps(policy_data)
     
-    decision = await reasoning_agent.evaluate(patient_data, policy_data, target_cpt)
+    decision = await reasoning_agent.evaluate(patient_data, policy_data, target_cpt, human_feedback)
     return {"decision": decision}
 
 from pydantic import BaseModel
@@ -126,6 +133,17 @@ async def chat_assistant(request: ChatRequest):
     
     response = await chat_agent.answer_question(request.query, patient_data, policy_data)
     return {"response": response}
+
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    file_tuple = (file.filename, file_bytes, file.content_type)
+    
+    response = whisper_client.audio.transcriptions.create(
+        model=Config.AZURE_WHISPER_DEPLOYMENT_NAME,
+        file=file_tuple
+    )
+    return {"text": response.text}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

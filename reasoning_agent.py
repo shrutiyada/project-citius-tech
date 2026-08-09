@@ -39,9 +39,21 @@ class PriorAuthReasoningAgent:
             response_format={"type": "json_object"}
         )
 
-    async def evaluate(self, patient_data: str, policy_data: str, target_cpt: str) -> dict:
+    async def evaluate(self, patient_data: str, policy_data: str, target_cpt: str, human_feedback: str = None) -> dict:
         context_payload = f"Target CPT: {target_cpt}\n\nPatient Data:\n{patient_data}\n\nPolicy Data:\n{policy_data}"
         
+        if human_feedback:
+            print("[REASONING AGENT] Human-in-the-loop override detected.")
+            reason_prompt = f"{self.reasoning_sys_msg}\n\n[CRITICAL OVERRIDE FROM HUMAN AUDITOR]: {human_feedback}\n\n{context_payload}"
+            try:
+                result = await self.kernel.invoke_prompt(prompt=reason_prompt, plugin_name="DecisionEngine", function_name="ReasoningOverride", settings=self.execution_settings)
+                decision_json = json.loads(str(result))
+                decision_json["audit_status"] = "MANUAL_OVERRIDE"
+                decision_json["audit_feedback"] = "Decision updated by human auditor."
+                return decision_json
+            except Exception as e:
+                return {"decision": "ERROR", "error": str(e)}
+
         max_attempts = 2
         current_critique_feedback = ""
         

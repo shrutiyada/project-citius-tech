@@ -9,6 +9,10 @@ if "patient_id" not in st.session_state:
     st.session_state.patient_id = ""
 if "policy_id" not in st.session_state:
     st.session_state.policy_id = ""
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "eval_result" not in st.session_state:
+    st.session_state.eval_result = None
 
 st.title("🏥 Automated Prior Auth Decision Engine")
 
@@ -62,41 +66,69 @@ with tab1:
     with c2:
         pol_id_eval = st.text_input("Policy Document ID", value=st.session_state.policy_id, key="pol_id_eval")
     with c3:
-        cpt = st.text_input("Requested CPT Code", placeholder="e.g. 99213")
+        cpt = st.text_input("Requested CPT Code", placeholder="e.g. 99213", key="cpt_code_input")
 
-    if st.button("Evaluate Prior Auth Decision", type="primary"):
-        if p_id_eval and pol_id_eval and cpt:
+    def run_evaluation(human_feedback=None):
+        if p_id_eval and pol_id_eval and st.session_state.cpt_code_input:
             with st.spinner("AI Reviewing Medical Necessity Criteria and Auditing Decision..."):
-                params = {"patient_id": p_id_eval, "policy_id": pol_id_eval, "target_cpt": cpt}
+                params = {
+                    "patient_id": p_id_eval, 
+                    "policy_id": pol_id_eval, 
+                    "target_cpt": st.session_state.cpt_code_input
+                }
+                if human_feedback:
+                    params["human_feedback"] = human_feedback
+                    
                 res = requests.post(f"{API_URL}/evaluate", params=params)
                 
                 if res.status_code == 200:
-                    data = res.json()["decision"]
-                    decision = data.get("decision", "UNKNOWN")
-                    
-                    if decision == "APPROVE":
-                        st.success("✅ **FINAL DECISION: APPROVED**")
-                    elif decision == "DENY":
-                        st.error("❌ **FINAL DECISION: DENIED**")
-                    else:
-                        st.warning("⚠️ **FINAL DECISION: PENDING REVIEW**")
-                        
-                    st.markdown("### Initial Reasoning:")
-                    st.write(data.get("reasoning", "No reasoning provided."))
-                    
-                    st.markdown("### Critique Audit Status:")
-                    audit_status = data.get("audit_status", "UNKNOWN")
-                    if audit_status == "PASS":
-                        st.info("✅ **Audit Passed**: The reasoning logic is sound and matches policy criteria.")
-                    else:
-                        st.error(f"❌ **Audit Failed**: {data.get('audit_feedback', 'No feedback provided.')}")
-                        
-                    st.markdown("### Matched Policy Criteria:")
-                    st.write(data.get("matched_criteria", "None"))
+                    st.session_state.eval_result = res.json()["decision"]
                 else:
                     st.error(f"Error: {res.text}")
         else:
             st.warning("Please fill in all fields.")
+
+    if st.button("Evaluate Prior Auth Decision", type="primary"):
+        run_evaluation()
+        
+    if st.session_state.eval_result:
+        data = st.session_state.eval_result
+        decision = data.get("decision", "UNKNOWN")
+        
+        st.markdown("---")
+        if decision == "APPROVE":
+            st.success("✅ **FINAL DECISION: APPROVED**")
+        elif decision == "DENY":
+            st.error("❌ **FINAL DECISION: DENIED**")
+        else:
+            st.warning("⚠️ **FINAL DECISION: PENDING REVIEW**")
+            
+        st.markdown("### Initial Reasoning:")
+        st.write(data.get("reasoning", "No reasoning provided."))
+        
+        st.markdown("### Critique Audit Status:")
+        audit_status = data.get("audit_status", "UNKNOWN")
+        if audit_status == "PASS":
+            st.info("✅ **Audit Passed**: The reasoning logic is sound and matches policy criteria.")
+        elif audit_status == "MANUAL_OVERRIDE":
+            st.info("👤 **Manual Override**: The decision was manually forced by a human auditor.")
+        else:
+            st.error(f"❌ **Audit Failed**: {data.get('audit_feedback', 'No feedback provided.')}")
+            
+        st.markdown("### Matched Policy Criteria:")
+        st.write(data.get("matched_criteria", "None"))
+        
+        st.divider()
+        st.subheader("👤 Human Auditor Override (HITL)")
+        st.markdown("If the policy criteria changed, or the AI made a mistake, you can manually override the decision here.")
+        
+        hitl_feedback = st.text_area("Human Override Instructions (e.g. 'Approve this, bypass step-therapy because policy changed yesterday')")
+        if st.button("Submit Human Override"):
+            if hitl_feedback:
+                run_evaluation(human_feedback=hitl_feedback)
+                st.rerun()
+            else:
+                st.warning("Please provide feedback to override.")
 
 with tab2:
     st.header("💬 AI Medical Assistant Chat")
@@ -109,26 +141,39 @@ with tab2:
         chat_pol_id = st.text_input("Policy Document ID", value=st.session_state.policy_id, key="pol_id_chat")
         
     st.divider()
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
         
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             
-    if prompt := st.chat_input("Ask a question about the policy or patient..."):
+    # Input mechanisms
+    prompt = st.chat_input("Ask a question about the policy or patient...")
+    audio_val = st.audio_input("Or speak your question...")
+    
+    final_query = None
+    if prompt:
+        final_query = prompt
+    elif audio_val:
+        with st.spinner("Transcribing Voice..."):
+            files = {"file": (audio_val.name, audio_val.getvalue(), "audio/wav")}
+            res_audio = requests.post(f"{API_URL}/transcribe", files=files)
+            if res_audio.status_code == 200:
+                final_query = res_audio.json().get("text", "")
+            else:
+                st.error("Failed to transcribe audio.")
+                
+    if final_query:
         if not chat_p_id or not chat_pol_id:
             st.error("Please ensure Patient ID and Policy ID are filled in above.")
         else:
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.session_state.messages.append({"role": "user", "content": final_query})
             with st.chat_message("user"):
-                st.markdown(prompt)
+                st.markdown(final_query)
                 
             with st.chat_message("assistant"):
                 with st.spinner("Searching Knowledge Base..."):
                     payload = {
-                        "query": prompt,
+                        "query": final_query,
                         "patient_id": chat_p_id,
                         "policy_id": chat_pol_id
                     }

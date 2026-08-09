@@ -8,8 +8,12 @@ AZURE_DOC_INTEL_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com/
 AZURE_DOC_INTEL_KEY=your_azure_doc_intelligence_key
 AZURE_DOC_INTEL_MODEL=prebuilt-layout
 
-# 3. OpenAI 
-OPENAI_API_KEY=sk-proj-your-openai-key-here
+# 3. Azure OpenAI (Azure AI Foundry)
+AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
+AZURE_OPENAI_API_KEY=your_azure_openai_key
+AZURE_OPENAI_DEPLOYMENT_NAME=your_gpt_model_deployment_name
+AZURE_WHISPER_DEPLOYMENT_NAME=your_whisper_deployment_name
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
 
 # 4. Azure AI Search (Knowledge Base)
 AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
