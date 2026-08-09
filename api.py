@@ -23,7 +23,7 @@ blob_handler = AzureBlobHandler(Config.AZURE_STORAGE_CONNECTION_STRING)
 doc_intel = AzureDocIntelligenceProcessor(Config.AZURE_DOC_INTEL_ENDPOINT, Config.AZURE_DOC_INTEL_KEY)
 phi_masker = PHIMasker()
 
-whisper_client = AzureOpenAI(
+gpt_client = AzureOpenAI(
     api_key=Config.AZURE_OPENAI_API_KEY,
     api_version=Config.AZURE_OPENAI_API_VERSION,
     azure_endpoint=Config.AZURE_OPENAI_ENDPOINT
@@ -134,16 +134,36 @@ async def chat_assistant(request: ChatRequest):
     response = await chat_agent.answer_question(request.query, patient_data, policy_data)
     return {"response": response}
 
+import base64
+
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     file_bytes = await file.read()
-    file_tuple = (file.filename, file_bytes, file.content_type)
+    encoded_audio = base64.b64encode(file_bytes).decode("utf-8")
     
-    response = whisper_client.audio.transcriptions.create(
-        model=Config.AZURE_WHISPER_DEPLOYMENT_NAME,
-        file=file_tuple
-    )
-    return {"text": response.text}
+    try:
+        response = gpt_client.chat.completions.create(
+            model=Config.AZURE_OPENAI_DEPLOYMENT_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "You are a professional transcriptionist. Transcribe the following audio exactly as spoken. Do not answer the question or provide commentary, just return the exact text of the speech."},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": encoded_audio,
+                                "format": "wav"
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+        return {"text": response.choices[0].message.content}
+    except Exception as e:
+        print(f"[AUDIO ERROR] {e}")
+        return {"text": "", "error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
