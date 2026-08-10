@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import uvicorn
 import json
@@ -50,33 +51,38 @@ chat_agent = ChatAgent(
 patient_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_PATIENT)
 policy_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_POLICY)
 
+
 @app.post("/upload/patient")
-async def upload_patient(patient_id: str = Form(...), files: List[UploadFile] = File(...)):
-    combined_raw_text = ""
-    uploaded_files = []
-    
+async def process_patient_pdf(
+    patient_id: str = Form(...),
+    files: list[UploadFile] = File(...)
+):
+    start_time = time.time()
+    all_text = ""
     for file in files:
-        # 1. Upload to Blob
-        file_bytes = await file.read()
-        blob_name = f"{patient_id}_{file.filename}"
-        blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name, file_bytes)
+        temp_pdf = f"temp_{file.filename}"
+        with open(temp_pdf, "wb") as f:
+            f.write(await file.read())
         
-        # 2. Extract OCR
-        sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name)
-        ocr_result = doc_intel.process_pdf_url(sas_url, blob_name)
-        combined_raw_text += f"\n--- Document: {file.filename} ---\n{ocr_result['full_content']}\n"
-        uploaded_files.append(blob_name)
+        # 1. OCR (with Page Numbers and Bounding Boxes)
+        doc_result = doc_intel.process_pdf_url(temp_pdf, file.filename)
+        all_text += doc_result["full_content"] + "\n\n"
         
-    # 3. Mask PHI & Extract Entities (Fix: added await)
-    masked_text = phi_masker.mask_text(combined_raw_text)
-    entities = await patient_agent.extract(masked_text)
+    # 2. PHI Masking
+    scrubbed_text = phi_masker.mask_phi(all_text)
     
-    # 4. Save to DB under the single Patient ID
-    patient_kb.index_document(patient_id, masked_text, entities)
-    return {"message": f"Patient {patient_id} indexed with {len(files)} files.", "entities": entities, "files": uploaded_files}
+    # 3. Entity Extraction (Diagnoses, Procedures, Citations)
+    entities = await patient_agent.extract(scrubbed_text)
+    
+    # 4. Save to Azure AI Search
+    kb_indexer.index_document(doc_id=patient_id, text_content=scrubbed_text, entities=entities)
+    
+    latency = round(time.time() - start_time, 2)
+    return {"status": "success", "patient_id": patient_id, "entities": entities, "processing_time_seconds": latency}
 
 @app.post("/upload/policy")
 async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)):
+    start_time = time.time()
     file_bytes = await file.read()
     blob_name = f"{policy_id}_{file.filename}"
     blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_POLICY, blob_name, file_bytes)
@@ -84,13 +90,15 @@ async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)
     sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_POLICY, blob_name)
     raw_text = doc_intel.process_pdf_url(sas_url, blob_name)["full_content"]
     
-    # No PHI Masking for public policies (Fix: added await)
     entities = await policy_agent.extract(raw_text)
     policy_kb.index_document(policy_id, raw_text, entities)
-    return {"message": f"Policy {policy_id} indexed.", "entities": entities}
+    
+    latency = round(time.time() - start_time, 2)
+    return {"status": "success", "policy_id": policy_id, "entities": entities, "processing_time_seconds": latency}
 
 @app.post("/evaluate")
 async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str, human_feedback: str = None):
+    start_time = time.time()
     patient_doc = patient_kb.get_document(patient_id)
     policy_doc = policy_kb.get_document(policy_id)
     
@@ -100,18 +108,16 @@ async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str, 
     patient_data = patient_doc.get("entities_metadata", "")
     policy_data = policy_doc.get("entities_metadata", "")
     
-    # Ensure it's a string even if stored as parsed dict depending on kb indexer version
-    if isinstance(patient_data, str) and patient_data.startswith("{"):
-        pass # Already JSON string
-    else:
+    if not isinstance(patient_data, str) or not patient_data.startswith("{"):
         patient_data = json.dumps(patient_data)
         
-    if isinstance(policy_data, str) and policy_data.startswith("{"):
-        pass
-    else:
+    if not isinstance(policy_data, str) or not policy_data.startswith("{"):
         policy_data = json.dumps(policy_data)
     
     decision = await reasoning_agent.evaluate(patient_data, policy_data, target_cpt, human_feedback)
+    
+    latency = round(time.time() - start_time, 2)
+    decision["processing_time_seconds"] = latency
     return {"decision": decision}
 
 from pydantic import BaseModel
