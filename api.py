@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import uvicorn
@@ -170,6 +171,9 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         print(f"[AUDIO ERROR] {e}")
         return {"text": "", "error": str(e)}
+
+# Serve React Frontend Statically
+app.mount("/", StaticFiles(directory="ui/dist", html=True), name="ui")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
