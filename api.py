@@ -172,8 +172,11 @@ async def transcribe_audio(file: UploadFile = File(...)):
         print(f"[AUDIO ERROR] {e}")
         return {"text": "", "error": str(e)}
 
+import os
+
 # Serve React Frontend Statically
-app.mount("/", StaticFiles(directory="ui/dist", html=True), name="ui")
+ui_dist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui/dist")
+app.mount("/", StaticFiles(directory=ui_dist_path, html=True), name="ui")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
