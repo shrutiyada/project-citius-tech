@@ -12,7 +12,7 @@ AZURE_DOC_INTEL_MODEL=prebuilt-layout
 AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
 AZURE_OPENAI_API_KEY=your_azure_openai_key
 AZURE_OPENAI_DEPLOYMENT_NAME=your_gpt_model_deployment_name
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_API_VERSION=2024-10-01-preview
 
 # 4. Azure AI Search (Knowledge Base)
 AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net

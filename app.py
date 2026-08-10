@@ -14,7 +14,7 @@ if "messages" not in st.session_state:
 if "eval_result" not in st.session_state:
     st.session_state.eval_result = None
 
-st.title("🏥 Automated Prior Auth Decision Engine")
+st.title("🏥 Prior Auth")
 
 tab1, tab2 = st.tabs(["Prior Auth Pipeline", "Medical Assistant Chat"])
 
@@ -69,12 +69,12 @@ with tab1:
         cpt = st.text_input("Requested CPT Code", placeholder="e.g. 99213", key="cpt_code_input")
 
     def run_evaluation(human_feedback=None):
-        if p_id_eval and pol_id_eval and st.session_state.cpt_code_input:
+        if p_id_eval and pol_id_eval:
             with st.spinner("AI Reviewing Medical Necessity Criteria and Auditing Decision..."):
                 params = {
                     "patient_id": p_id_eval, 
                     "policy_id": pol_id_eval, 
-                    "target_cpt": st.session_state.cpt_code_input
+                    "target_cpt": st.session_state.cpt_code_input if st.session_state.cpt_code_input else ""
                 }
                 if human_feedback:
                     params["human_feedback"] = human_feedback
@@ -123,22 +123,33 @@ with tab1:
         st.markdown("If the policy criteria changed, or the AI made a mistake, you can manually override the decision here.")
         
         hitl_feedback = st.text_area("Human Override Instructions (e.g. 'Approve this, bypass step-therapy because policy changed yesterday')")
+        hitl_audio = st.audio_input("Or speak your override instructions...", key="hitl_audio")
+        
         if st.button("Submit Human Override"):
-            if hitl_feedback:
-                run_evaluation(human_feedback=hitl_feedback)
+            final_hitl = hitl_feedback
+            if hitl_audio and not final_hitl:
+                with st.spinner("Transcribing Override Voice..."):
+                    files = {"file": (hitl_audio.name, hitl_audio.getvalue(), "audio/wav")}
+                    res_audio = requests.post(f"{API_URL}/transcribe", files=files)
+                    if res_audio.status_code == 200:
+                        res_data = res_audio.json()
+                        if res_data.get("error"):
+                            st.error(f"Transcription Error: {res_data.get('error')}")
+                        else:
+                            final_hitl = res_data.get("text", "")
+                            
+            if final_hitl:
+                run_evaluation(human_feedback=final_hitl)
                 st.rerun()
             else:
-                st.warning("Please provide feedback to override.")
+                st.warning("Please provide feedback (text or voice) to override.")
 
 with tab2:
     st.header("💬 AI Medical Assistant Chat")
     st.markdown("Ask questions about the uploaded patient data and medical policies.")
     
-    colA, colB = st.columns(2)
-    with colA:
-        chat_p_id = st.text_input("Patient Document ID", value=st.session_state.patient_id, key="p_id_chat")
-    with colB:
-        chat_pol_id = st.text_input("Policy Document ID", value=st.session_state.policy_id, key="pol_id_chat")
+    chat_p_id = st.session_state.patient_id
+    chat_pol_id = st.session_state.policy_id
         
     st.divider()
         
@@ -158,7 +169,11 @@ with tab2:
             files = {"file": (audio_val.name, audio_val.getvalue(), "audio/wav")}
             res_audio = requests.post(f"{API_URL}/transcribe", files=files)
             if res_audio.status_code == 200:
-                final_query = res_audio.json().get("text", "")
+                res_data = res_audio.json()
+                if res_data.get("error"):
+                    st.error(f"Transcription Error: {res_data.get('error')}")
+                else:
+                    final_query = res_data.get("text", "")
             else:
                 st.error("Failed to transcribe audio.")
                 

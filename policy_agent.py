@@ -17,10 +17,14 @@ class PolicyEntityAgent:
         
         self.system_message = (
             "You are an expert medical policy analyst. Your job is to read dense medical insurance policies "
-            "and extract the specific coverage rules. You must scan the entire document to find the 'Covered Indications', "
-            "'Medical Necessity Criteria', and 'Exclusions'.\n"
-            "You MUST output valid JSON only, matching this structure: "
-            "{'covered_cpt_codes': ['string'], 'medical_necessity_criteria': ['string'], 'exclusions': ['string']}"
+            "and extract the specific coverage rules. You must scan the entire document to find the "
+            "'Medical Necessity Criteria' and 'Exclusions'. Do NOT extract diagnoses or CPT codes.\n"
+            "The text contains [Page X] markers. You MUST include exact page citations for every rule.\n"
+            "You MUST output valid JSON only, matching this structure:\n"
+            "{\n"
+            "  'medical_necessity_criteria': [{'criterion': 'string', 'citations': ['[Page X]']}],\n"
+            "  'exclusions': [{'exclusion': 'string', 'citations': ['[Page X]']}]\n"
+            "}"
         )
         
         self.execution_settings = OpenAIChatPromptExecutionSettings(
@@ -48,4 +52,4 @@ class PolicyEntityAgent:
             
         except Exception as e:
             print(f"[SEMANTIC KERNEL ERROR] Extraction failed: {e}")
-            return {"error": str(e), "covered_cpt_codes": [], "medical_necessity_criteria": [], "exclusions": [], "llm_metrics": {}}
+            return {"error": str(e), "medical_necessity_criteria": [], "exclusions": [], "llm_metrics": {}}

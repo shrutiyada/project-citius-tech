@@ -24,9 +24,13 @@ class PatientEntityAgent:
         self.system_message = (
             "You are an expert medical coder. Extract all 'diagnoses' and 'procedures' (with CPT codes if available) "
             "from the provided medical text. Focus heavily on the procedures requested by the doctor. "
+            "The text contains [Page X] markers. You MUST include exact page citations for every extracted entity. "
             "The text has been scrubbed for PHI (you will see placeholders like <PERSON>).\n"
-            "You MUST output valid JSON only, matching this structure: "
-            "{'diagnoses': ['string'], 'procedures': [{'procedure_name': 'string', 'cpt_code': 'string or null'}]}"
+            "You MUST output valid JSON only, matching this structure:\n"
+            "{\n"
+            "  'diagnoses': [{'diagnosis': 'string', 'citations': ['[Page X]']}],\n"
+            "  'procedures': [{'procedure_name': 'string', 'cpt_code': 'string or null', 'citations': ['[Page X]']}]\n"
+            "}"
         )
         
         # Configure execution settings for JSON output

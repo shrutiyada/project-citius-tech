@@ -19,9 +19,10 @@ class PriorAuthReasoningAgent:
         self.reasoning_sys_msg = (
             "You are a Medical Director conducting a prior authorization review. "
             "You will evaluate if the patient meets the medical necessity criteria. "
+            "You MUST include [Page X] citations in your reasoning to prove where you found the evidence in the patient chart. "
             "If they meet all criteria, APPROVE. If they fail criteria, DENY. "
             "You MUST output valid JSON only: "
-            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'string', 'matched_criteria': 'string'}"
+            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'string with citations', 'matched_criteria': 'string'}"
         )
         
         # 2. Critique Prompt
@@ -40,6 +41,23 @@ class PriorAuthReasoningAgent:
         )
 
     async def evaluate(self, patient_data: str, policy_data: str, target_cpt: str, human_feedback: str = None) -> dict:
+        if not target_cpt:
+            print("[REASONING AGENT] Target CPT missing. Attempting to auto-deduce from Patient Data...")
+            cpt_prompt = (
+                "You are a medical coder. Review the patient's data below and output the exact CPT code of the "
+                "procedure that is being requested for prior authorization. Output ONLY a valid JSON object matching "
+                "this structure: {'cpt_code': 'the_code_as_string'}.\n\nPatient Data:\n" + patient_data
+            )
+            try:
+                cpt_result = await self.kernel.invoke_prompt(
+                    prompt=cpt_prompt, plugin_name="DecisionEngine", function_name="DeduceCPT", settings=self.execution_settings
+                )
+                target_cpt = json.loads(str(cpt_result)).get("cpt_code", "UNKNOWN")
+                print(f"[REASONING AGENT] Auto-deduced CPT: {target_cpt}")
+            except Exception as e:
+                print(f"[REASONING AGENT ERROR] Failed to deduce CPT: {e}")
+                target_cpt = "UNKNOWN"
+                
         context_payload = f"Target CPT: {target_cpt}\n\nPatient Data:\n{patient_data}\n\nPolicy Data:\n{policy_data}"
         
         if human_feedback:
