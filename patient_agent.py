@@ -1,30 +1,30 @@
 import json
-from pydantic import BaseModel
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion, OpenAIChatPromptExecutionSettings
-from semantic_kernel.prompt_template import PromptTemplateConfig
+import os
+from agent_framework import Agent
+from agent_framework.foundry import FoundryChatClient
+from azure.identity.aio import DefaultAzureCredential
 
 class PatientEntityAgent:
-    def __init__(self, endpoint: str, api_key: str, deployment_name: str, api_version: str = "2024-02-15-preview"):
-        print(f"[SEMANTIC KERNEL] Initializing Patient Agent with Azure OpenAI deployment '{deployment_name}'...")
+    def __init__(self, endpoint: str, api_key: str = None, deployment_name: str = "gpt-4o", api_version: str = "2024-02-15-preview"):
+        print(f"[MAF] Initializing Patient Agent with Azure OpenAI deployment '{deployment_name}'...")
         
-        # Initialize the Kernel
-        self.kernel = Kernel()
-        
-        # Add the Azure OpenAI Chat Completion service
-        chat_service = AzureChatCompletion(
-            deployment_name=deployment_name,
+        # Initialize MAF Client with Entra ID
+        self.credential = DefaultAzureCredential()
+        self.client = FoundryChatClient(
             endpoint=endpoint,
-            api_key=api_key,
+            credential=self.credential,
+            deployment_name=deployment_name,
             api_version=api_version
         )
-        self.kernel.add_service(chat_service)
         
-        # Define the system prompt
         self.system_message = (
             "You are an expert medical coder. Extract all 'diagnoses' and 'procedures' (with CPT codes if available) "
             "from the provided medical text. Focus heavily on the procedures requested by the doctor. "
-            "The text contains [Page X] markers. You MUST include exact page citations for every extracted entity. "
+            "The text contains [Page X] markers.\n\n"
+            "⚠️ CRITICAL SAFETY WARNING ON CITATIONS ⚠️\n"
+            "You MUST include the exact page citation for EVERY extracted entity.\n"
+            "DO NOT guess or invent page numbers. You must locate the exact [Page X] marker that immediately precedes the text you are quoting.\n"
+            "Failure to provide accurate citations is a critical safety violation.\n\n"
             "The text has been scrubbed for PHI (you will see placeholders like <PERSON>).\n"
             "You MUST output valid JSON only, matching this structure:\n"
             "{\n"
@@ -33,37 +33,32 @@ class PatientEntityAgent:
             "}"
         )
         
-        # Configure execution settings for JSON output
-        self.execution_settings = OpenAIChatPromptExecutionSettings(
-            temperature=0.0,
-            response_format={"type": "json_object"}
+        # Initialize MAF Agent
+        self.agent = Agent(
+            client=self.client,
+            system_message=self.system_message
         )
 
     async def extract(self, text: str) -> dict:
         if not text.strip():
             return {"diagnoses": [], "procedures": []}
             
-        prompt = f"{self.system_message}\n\nPatient Record:\n{text}"
+        prompt = f"Patient Record:\n{text}"
         
         try:
-            # Execute the prompt
-            result = await self.kernel.invoke_prompt(
-                prompt=prompt,
-                plugin_name="PatientExtraction",
-                function_name="ExtractEntities",
-                settings=self.execution_settings
-            )
+            # Execute via MAF
+            result = await self.agent.run(prompt)
             
-            # Parse the JSON result
             result_str = str(result)
+            # Handle potential markdown code blocks in the output
+            if result_str.startswith("```json"):
+                result_str = result_str.strip("```json").strip("```").strip()
+                
             parsed_json = json.loads(result_str)
-            
-            # Semantic Kernel Python doesn't expose raw token usage natively in invoke_prompt yet in the same way,
-            # so we return a placeholder for metrics to keep compatibility with the API.
             parsed_json["llm_metrics"] = {"total_tokens": 0, "total_cost_usd": 0.0}
             
             return parsed_json
             
         except Exception as e:
-            print(f"[SEMANTIC KERNEL ERROR] Extraction failed: {e}")
+            print(f"[MAF ERROR] Patient Extraction failed: {e}")
             return {"error": str(e), "diagnoses": [], "procedures": [], "llm_metrics": {}}

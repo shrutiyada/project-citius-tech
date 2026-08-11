@@ -1,27 +1,30 @@
 import json
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion, OpenAIChatPromptExecutionSettings
+import os
+from agent_framework import Agent
+from agent_framework.foundry import FoundryChatClient
+from azure.identity.aio import DefaultAzureCredential
 
 class PriorAuthReasoningAgent:
-    def __init__(self, endpoint: str, api_key: str, deployment_name: str, api_version: str = "2024-02-15-preview"):
-        print(f"[SEMANTIC KERNEL] Initializing Reasoning & Critique Agent with Azure OpenAI deployment '{deployment_name}'...")
+    def __init__(self, endpoint: str, api_key: str = None, deployment_name: str = "gpt-4o", api_version: str = "2024-02-15-preview"):
+        print(f"[MAF] Initializing Reasoning & Critique Agent with Azure OpenAI deployment '{deployment_name}'...")
         
-        self.kernel = Kernel()
-        chat_service = AzureChatCompletion(
-            deployment_name=deployment_name,
+        self.credential = DefaultAzureCredential()
+        self.client = FoundryChatClient(
             endpoint=endpoint,
-            api_key=api_key,
+            credential=self.credential,
+            deployment_name=deployment_name,
             api_version=api_version
         )
-        self.kernel.add_service(chat_service)
         
         # 1. Reasoning Prompt
         self.reasoning_sys_msg = (
             "You are a Medical Director conducting a prior authorization review. "
             "You will evaluate if the patient meets the medical necessity criteria line-by-line. "
+            "⚠️ CRITICAL: When extracting 'evidence', you MUST quote the exact, verbatim text from the patient data. DO NOT paraphrase. "
             "You MUST output valid JSON only matching this exact structure: "
-            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'summary string', 'criteria_matrix': [{'criterion': 'string', 'evidence': 'exact quote from patient data', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
+            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'summary string', 'criteria_matrix': [{'criterion': 'string', 'evidence': 'exact verbatim quote from patient data', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
         )
+        self.reasoning_agent = Agent(client=self.client, system_message=self.reasoning_sys_msg)
         
         # 2. Critique Prompt
         self.critique_sys_msg = (
@@ -33,38 +36,52 @@ class PriorAuthReasoningAgent:
             "You MUST output valid JSON only matching this exact structure: "
             "{'status': 'PASS/FAIL', 'critique_feedback': 'string or null', 'faithfulness_score': 95, 'relevance_score': 95, 'precision_score': 95, 'recall_score': 95}"
         )
+        self.critique_agent = Agent(client=self.client, system_message=self.critique_sys_msg)
         
-        self.execution_settings = OpenAIChatPromptExecutionSettings(
-            temperature=0.0,
-            response_format={"type": "json_object"}
+        # 3. CPT Deduce Prompt
+        cpt_sys_msg = (
+            "You are a medical coder. Review the patient's data below and output the exact CPT code of the "
+            "procedure that is being requested for prior authorization. Output ONLY a valid JSON object matching "
+            "this structure: {'cpt_code': 'the_code_as_string'}."
         )
+        self.cpt_agent = Agent(client=self.client, system_message=cpt_sys_msg)
+
+    async def _safe_run(self, agent, prompt: str) -> dict:
+        result = await agent.run(prompt)
+        result_str = str(result)
+        if result_str.startswith("```json"):
+            result_str = result_str.strip("```json").strip("```").strip()
+        return json.loads(result_str)
 
     async def evaluate(self, patient_data: str, policy_data: str, target_cpt: str, human_feedback: str = None) -> dict:
+        import json
+        
+        # 1. Extract and strip OCR polygons from patient_data to save tokens
+        ocr_polygons = []
+        try:
+            patient_dict = json.loads(patient_data)
+            ocr_polygons = patient_dict.pop("ocr_polygons", [])
+            patient_data = json.dumps(patient_dict)
+        except Exception:
+            pass
+
         if not target_cpt:
-            print("[REASONING AGENT] Target CPT missing. Attempting to auto-deduce from Patient Data...")
-            cpt_prompt = (
-                "You are a medical coder. Review the patient's data below and output the exact CPT code of the "
-                "procedure that is being requested for prior authorization. Output ONLY a valid JSON object matching "
-                "this structure: {'cpt_code': 'the_code_as_string'}.\n\nPatient Data:\n" + patient_data
-            )
+            print("[MAF] Target CPT missing. Attempting to auto-deduce from Patient Data...")
             try:
-                cpt_result = await self.kernel.invoke_prompt(
-                    prompt=cpt_prompt, plugin_name="DecisionEngine", function_name="DeduceCPT", settings=self.execution_settings
-                )
-                target_cpt = json.loads(str(cpt_result)).get("cpt_code", "UNKNOWN")
-                print(f"[REASONING AGENT] Auto-deduced CPT: {target_cpt}")
+                cpt_result = await self._safe_run(self.cpt_agent, f"Patient Data:\n{patient_data}")
+                target_cpt = cpt_result.get("cpt_code", "UNKNOWN")
+                print(f"[MAF] Auto-deduced CPT: {target_cpt}")
             except Exception as e:
-                print(f"[REASONING AGENT ERROR] Failed to deduce CPT: {e}")
+                print(f"[MAF ERROR] Failed to deduce CPT: {e}")
                 target_cpt = "UNKNOWN"
                 
         context_payload = f"Target CPT: {target_cpt}\n\nPatient Data:\n{patient_data}\n\nPolicy Data:\n{policy_data}"
         
         if human_feedback:
-            print("[REASONING AGENT] Human-in-the-loop override detected.")
-            reason_prompt = f"{self.reasoning_sys_msg}\n\n[CRITICAL OVERRIDE FROM HUMAN AUDITOR]: {human_feedback}\n\n{context_payload}"
+            print("[MAF] Human-in-the-loop override detected.")
+            reason_prompt = f"[CRITICAL OVERRIDE FROM HUMAN AUDITOR]: {human_feedback}\n\n{context_payload}"
             try:
-                result = await self.kernel.invoke_prompt(prompt=reason_prompt, plugin_name="DecisionEngine", function_name="ReasoningOverride", settings=self.execution_settings)
-                decision_json = json.loads(str(result))
+                decision_json = await self._safe_run(self.reasoning_agent, reason_prompt)
                 decision_json["audit_status"] = "MANUAL_OVERRIDE"
                 decision_json["audit_feedback"] = "Decision updated by human auditor."
                 return decision_json
@@ -75,38 +92,24 @@ class PriorAuthReasoningAgent:
         current_critique_feedback = ""
         
         for attempt in range(1, max_attempts + 1):
-            print(f"[REASONING AGENT] Attempt {attempt}/{max_attempts}...")
+            print(f"[MAF] Attempt {attempt}/{max_attempts}...")
             
-            # Formulate Reasoning Prompt (include past critique if any)
-            reason_prompt = f"{self.reasoning_sys_msg}\n\n{context_payload}"
+            reason_prompt = context_payload
             if current_critique_feedback:
                 reason_prompt += f"\n\n[PREVIOUS CRITIQUE FEEDBACK TO FIX]: {current_critique_feedback}"
                 
             try:
                 # Run Reasoning Agent
-                reason_result = await self.kernel.invoke_prompt(
-                    prompt=reason_prompt,
-                    plugin_name="DecisionEngine",
-                    function_name="Reasoning",
-                    settings=self.execution_settings
-                )
-                decision_json = json.loads(str(reason_result))
+                decision_json = await self._safe_run(self.reasoning_agent, reason_prompt)
                 
                 # Formulate Critique Prompt
                 critique_prompt = (
-                    f"{self.critique_sys_msg}\n\n"
                     f"{context_payload}\n\n"
                     f"--- Proposed Decision to Review ---\n{json.dumps(decision_json, indent=2)}"
                 )
                 
-                print("[CRITIQUE AGENT] Auditing decision...")
-                critique_result = await self.kernel.invoke_prompt(
-                    prompt=critique_prompt,
-                    plugin_name="DecisionEngine",
-                    function_name="Critique",
-                    settings=self.execution_settings
-                )
-                critique_json = json.loads(str(critique_result))
+                print("[MAF CRITIQUE AGENT] Auditing decision...")
+                critique_json = await self._safe_run(self.critique_agent, critique_prompt)
                 
                 # Check status
                 if critique_json.get("status") == "PASS" or attempt == max_attempts:
@@ -119,21 +122,33 @@ class PriorAuthReasoningAgent:
                         "recall": critique_json.get("recall_score", 90)
                     }
                     
-                    # Bounding Box Stub Integration
+                    # True Bounding Box Algorithm Integration
                     if "criteria_matrix" in decision_json:
                         for row in decision_json["criteria_matrix"]:
-                            if row.get("evidence") and row.get("citation"):
-                                row["bounding_box"] = "[120, 345, 450, 520]" # Stub for OCR Polygon matching
+                            evidence_str = row.get("evidence", "")
+                            if evidence_str and evidence_str.strip():
+                                best_box = None
+                                # Find first polygon that contains part of the evidence string (or vice-versa)
+                                for poly in ocr_polygons:
+                                    if poly["text"].lower() in evidence_str.lower() or evidence_str.lower() in poly["text"].lower():
+                                        # Format Azure Polygon [x, y, x, y, x, y, x, y] to [x1, y1, x2, y2] stub for simplicity
+                                        p = poly["polygon"]
+                                        if len(p) >= 8:
+                                            best_box = f"[{p[0]}, {p[1]}, {p[4]}, {p[5]}]"
+                                        else:
+                                            best_box = str(p)
+                                        break
+                                row["bounding_box"] = best_box
                             else:
                                 row["bounding_box"] = None
                                 
                     return decision_json
                 else:
-                    print("[CRITIQUE AGENT] Logic rejected. Sending back to Reasoning Agent...")
+                    print("[MAF CRITIQUE AGENT] Logic rejected. Sending back to Reasoning Agent...")
                     current_critique_feedback = critique_json.get("critique_feedback", "Fix the logic.")
                     
             except Exception as e:
-                print(f"[SEMANTIC KERNEL ERROR] Evaluation failed: {e}")
+                print(f"[MAF ERROR] Evaluation failed: {e}")
                 return {"decision": "ERROR", "error": str(e)}
                 
         return {"decision": "ERROR", "reasoning": "Failed to complete self-reflection loop."}

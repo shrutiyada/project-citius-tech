@@ -60,6 +60,8 @@ async def process_patient_pdf(
 ):
     start_time = time.time()
     all_text = ""
+    all_ocr_polygons = []
+    all_confidences = []
     for file in files:
         temp_pdf = f"temp_{file.filename}"
         with open(temp_pdf, "wb") as f:
@@ -68,6 +70,10 @@ async def process_patient_pdf(
         # 1. OCR (with Page Numbers and Bounding Boxes)
         doc_result = doc_intel.process_pdf_url(temp_pdf, file.filename)
         all_text += doc_result["full_content"] + "\n\n"
+        all_ocr_polygons.extend(doc_result.get("ocr_polygons", []))
+        all_confidences.append(doc_result.get("ocr_confidence_score", 99.0))
+        
+    avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 99.0
         
     # 2. PHI Masking
     scrubbed_text = phi_masker.mask_phi(all_text)
@@ -75,11 +81,15 @@ async def process_patient_pdf(
     # 3. Entity Extraction (Diagnoses, Procedures, Citations)
     entities = await patient_agent.extract(scrubbed_text)
     
+    # Inject OCR metrics for downstream reasoning and UI
+    entities["ocr_polygons"] = all_ocr_polygons
+    entities["ocr_confidence_score"] = avg_confidence
+    
     # 4. Save to Azure AI Search
     kb_indexer.index_document(doc_id=patient_id, text_content=scrubbed_text, entities=entities)
     
     latency = round(time.time() - start_time, 2)
-    return {"status": "success", "patient_id": patient_id, "entities": entities, "processing_time_seconds": latency}
+    return {"status": "success", "patient_id": patient_id, "entities": entities, "processing_time_seconds": latency, "ocr_confidence_score": avg_confidence}
 
 @app.post("/upload/policy")
 async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)):
@@ -89,13 +99,16 @@ async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)
     blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_POLICY, blob_name, file_bytes)
     
     sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_POLICY, blob_name)
-    raw_text = doc_intel.process_pdf_url(sas_url, blob_name)["full_content"]
+    doc_result = doc_intel.process_pdf_url(sas_url, blob_name)
+    raw_text = doc_result["full_content"]
+    ocr_confidence = doc_result.get("ocr_confidence_score", 99.0)
     
     entities = await policy_agent.extract(raw_text)
+    entities["ocr_confidence_score"] = ocr_confidence
     policy_kb.index_document(policy_id, raw_text, entities)
     
     latency = round(time.time() - start_time, 2)
-    return {"status": "success", "policy_id": policy_id, "entities": entities, "processing_time_seconds": latency}
+    return {"status": "success", "policy_id": policy_id, "entities": entities, "processing_time_seconds": latency, "ocr_confidence_score": ocr_confidence}
 
 @app.post("/evaluate")
 async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str, human_feedback: str = None):

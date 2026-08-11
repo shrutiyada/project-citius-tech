@@ -14,13 +14,37 @@ class AzureDocIntelligenceProcessor:
         result = poller.result()
         
         full_text = ""
+        ocr_polygons = []
+        confidences = []
+        
         if hasattr(result, "pages"):
             for page in result.pages:
                 full_text += f"\n\n--- [Page {page.page_number}] ---\n"
+                
+                # Try to extract word-level confidence if available
+                if hasattr(page, "words"):
+                    for word in page.words:
+                        if hasattr(word, "confidence"):
+                            confidences.append(word.confidence)
+                            
                 if hasattr(page, "lines"):
                     for line in page.lines:
                         full_text += line.content + "\n"
+                        # Extract Polygon coordinates if available
+                        if hasattr(line, "polygon") and line.polygon:
+                            ocr_polygons.append({
+                                "text": line.content,
+                                "page": page.page_number,
+                                "polygon": line.polygon
+                            })
         else:
             full_text = result.content if hasattr(result, "content") else ""
             
-        return {"filename": filename, "full_content": full_text.strip()}
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.99
+            
+        return {
+            "filename": filename, 
+            "full_content": full_text.strip(),
+            "ocr_polygons": ocr_polygons,
+            "ocr_confidence_score": round(avg_confidence * 100, 2)
+        }
