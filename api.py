@@ -17,6 +17,16 @@ from openai import AzureOpenAI
 
 app = FastAPI(title="Prior Auth Decision Engine API")
 
+# Prevent browser caching of the React index.html
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # Initialize shared resources
 if not Config.validate_all():
     raise RuntimeError("Missing configuration.")
@@ -185,11 +195,19 @@ async def transcribe_audio(file: UploadFile = File(...)):
         print(f"[AUDIO ERROR] {e}")
         return {"text": "", "error": str(e)}
 
-import os
+from fastapi.responses import FileResponse
 
-# Serve React Frontend Statically
+@app.get("/")
+async def serve_spa():
+    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui/dist/index.html")
+    response = FileResponse(index_path)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 ui_dist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui/dist")
-app.mount("/", StaticFiles(directory=ui_dist_path, html=True), name="ui")
+app.mount("/", StaticFiles(directory=ui_dist_path, html=False), name="ui")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
