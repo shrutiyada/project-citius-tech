@@ -1,5 +1,6 @@
 import json
 import os
+from difflib import SequenceMatcher
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from azure.identity.aio import DefaultAzureCredential
@@ -10,21 +11,21 @@ class PriorAuthReasoningAgent:
         
         self.credential = DefaultAzureCredential()
         self.client = FoundryChatClient(
-            endpoint=endpoint,
+            project_endpoint=endpoint,
             credential=self.credential,
-            deployment_name=deployment_name,
-            api_version=api_version
+            model=deployment_name
         )
         
         # 1. Reasoning Prompt
         self.reasoning_sys_msg = (
-            "You are a Medical Director conducting a prior authorization review. "
-            "You will evaluate if the patient meets the medical necessity criteria line-by-line. "
-            "⚠️ CRITICAL: When extracting 'evidence', you MUST quote the exact, verbatim text from the patient data. DO NOT paraphrase. "
+            "You are a Medical Director conducting a strict prior authorization review. "
+            "You will evaluate if the patient meets the medical necessity criteria. "
+            "⚠️ CRITICAL INSTRUCTION: When extracting the 'criterion', you must pick complex, formal clinical thresholds from the Policy Data (e.g. 'Must have 6 months of conservative therapy', 'BMI > 35'). Ignore mundane administrative lines. "
+            "⚠️ CRITICAL INSTRUCTION: When extracting 'evidence', you MUST quote the exact, verbatim text strictly from the PATIENT DATA that proves or disproves the criterion. DO NOT just copy the policy criterion. DO NOT paraphrase. DO NOT invent text. "
             "You MUST output valid JSON only matching this exact structure: "
-            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'summary string', 'criteria_matrix': [{'criterion': 'string', 'evidence': 'exact verbatim quote from patient data', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
+            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'summary string', 'criteria_matrix': [{'criterion': 'complex clinical threshold from policy', 'evidence': 'exact verbatim quote strictly from patient data', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
         )
-        self.reasoning_agent = Agent(client=self.client, system_message=self.reasoning_sys_msg)
+        self.reasoning_agent = Agent(client=self.client, instructions=self.reasoning_sys_msg)
         
         # 2. Critique Prompt
         self.critique_sys_msg = (
@@ -36,7 +37,7 @@ class PriorAuthReasoningAgent:
             "You MUST output valid JSON only matching this exact structure: "
             "{'status': 'PASS/FAIL', 'critique_feedback': 'string or null', 'faithfulness_score': 95, 'relevance_score': 95, 'precision_score': 95, 'recall_score': 95}"
         )
-        self.critique_agent = Agent(client=self.client, system_message=self.critique_sys_msg)
+        self.critique_agent = Agent(client=self.client, instructions=self.critique_sys_msg)
         
         # 3. CPT Deduce Prompt
         cpt_sys_msg = (
@@ -44,7 +45,7 @@ class PriorAuthReasoningAgent:
             "procedure that is being requested for prior authorization. Output ONLY a valid JSON object matching "
             "this structure: {'cpt_code': 'the_code_as_string'}."
         )
-        self.cpt_agent = Agent(client=self.client, system_message=cpt_sys_msg)
+        self.cpt_agent = Agent(client=self.client, instructions=cpt_sys_msg)
 
     async def _safe_run(self, agent, prompt: str) -> dict:
         result = await agent.run(prompt)
@@ -128,16 +129,27 @@ class PriorAuthReasoningAgent:
                             evidence_str = row.get("evidence", "")
                             if evidence_str and evidence_str.strip():
                                 best_box = None
-                                # Find first polygon that contains part of the evidence string (or vice-versa)
+                                best_ratio = 0.0
+                                evidence_lower = evidence_str.lower()
+                                
                                 for poly in ocr_polygons:
-                                    if poly["text"].lower() in evidence_str.lower() or evidence_str.lower() in poly["text"].lower():
-                                        # Format Azure Polygon [x, y, x, y, x, y, x, y] to [x1, y1, x2, y2] stub for simplicity
-                                        p = poly["polygon"]
+                                    poly_text = poly.get("text", "").lower()
+                                    # Exact substring match
+                                    if poly_text in evidence_lower or evidence_lower in poly_text:
+                                        ratio = 1.0
+                                    else:
+                                        # Fuzzy match overlap
+                                        matcher = SequenceMatcher(None, evidence_lower, poly_text)
+                                        ratio = matcher.quick_ratio()
+                                        
+                                    if ratio > best_ratio and ratio > 0.4:
+                                        best_ratio = ratio
+                                        p = poly.get("polygon", [])
                                         if len(p) >= 8:
                                             best_box = f"[{p[0]}, {p[1]}, {p[4]}, {p[5]}]"
                                         else:
                                             best_box = str(p)
-                                        break
+                                            
                                 row["bounding_box"] = best_box
                             else:
                                 row["bounding_box"] = None
