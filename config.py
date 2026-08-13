@@ -22,6 +22,10 @@ class Config:
     AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")
     AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
     
+    # 5. Azure AI Language (PHI Masking)
+    AZURE_LANGUAGE_ENDPOINT = os.getenv("AZURE_LANGUAGE_ENDPOINT", "")
+    AZURE_LANGUAGE_KEY = os.getenv("AZURE_LANGUAGE_KEY", "")
+    
     # 4. Azure AI Search (Knowledge Base)
     AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT", "")
     AZURE_SEARCH_KEY = os.getenv("AZURE_SEARCH_KEY", "")
@@ -37,10 +41,11 @@ class Config:
         if not cls.AZURE_DOC_INTEL_ENDPOINT: missing.append("AZURE_DOC_INTEL_ENDPOINT")
         if not cls.AZURE_DOC_INTEL_KEY: missing.append("AZURE_DOC_INTEL_KEY")
         if not cls.AZURE_OPENAI_ENDPOINT: missing.append("AZURE_OPENAI_ENDPOINT")
-        if not cls.AZURE_OPENAI_API_KEY: missing.append("AZURE_OPENAI_API_KEY")
         if not cls.AZURE_OPENAI_DEPLOYMENT_NAME: missing.append("AZURE_OPENAI_DEPLOYMENT_NAME")
         if not cls.AZURE_SEARCH_ENDPOINT: missing.append("AZURE_SEARCH_ENDPOINT")
         if not cls.AZURE_SEARCH_KEY: missing.append("AZURE_SEARCH_KEY")
+        if not cls.AZURE_LANGUAGE_ENDPOINT: missing.append("AZURE_LANGUAGE_ENDPOINT")
+        if not cls.AZURE_LANGUAGE_KEY: missing.append("AZURE_LANGUAGE_KEY")
         
         if missing:
             print(f"[FATAL] Missing required environment variables:\n - " + "\n - ".join(missing))

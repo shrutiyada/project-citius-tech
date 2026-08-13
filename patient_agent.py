@@ -11,10 +11,9 @@ class PatientEntityAgent:
         # Initialize MAF Client with Entra ID
         self.credential = DefaultAzureCredential()
         self.client = FoundryChatClient(
-            endpoint=endpoint,
+            project_endpoint=endpoint,
             credential=self.credential,
-            deployment_name=deployment_name,
-            api_version=api_version
+            model=deployment_name
         )
         
         self.system_message = (
@@ -36,29 +35,60 @@ class PatientEntityAgent:
         # Initialize MAF Agent
         self.agent = Agent(
             client=self.client,
-            system_message=self.system_message
+            instructions=self.system_message
         )
+
+        self.validation_sys_msg = (
+            "You are a Senior Medical Auditor validating extracted data. "
+            "Review the extracted JSON against the provided Patient Record. "
+            "1. Ensure no diagnoses or procedures were hallucinated. "
+            "2. Ensure EVERY citation explicitly matches a [Page X] marker that actually exists in the text. "
+            "If the extraction is 100% accurate, output 'PASS'. "
+            "If there are errors or hallucinations, output 'FAIL' along with specific feedback on what to fix. "
+            "You MUST output valid JSON only matching this structure: {'status': 'PASS/FAIL', 'feedback': 'string'}"
+        )
+        self.validation_agent = Agent(client=self.client, instructions=self.validation_sys_msg)
 
     async def extract(self, text: str) -> dict:
         if not text.strip():
             return {"diagnoses": [], "procedures": []}
             
-        prompt = f"Patient Record:\n{text}"
+        context_prompt = f"Patient Record:\n{text}"
         
-        try:
-            # Execute via MAF
-            result = await self.agent.run(prompt)
-            
-            result_str = str(result)
-            # Handle potential markdown code blocks in the output
-            if result_str.startswith("```json"):
-                result_str = result_str.strip("```json").strip("```").strip()
+        max_attempts = 2
+        feedback = ""
+        
+        for attempt in range(1, max_attempts + 1):
+            prompt = context_prompt
+            if feedback:
+                prompt += f"\n\n[PREVIOUS VALIDATION FEEDBACK TO FIX]: {feedback}"
                 
-            parsed_json = json.loads(result_str)
-            parsed_json["llm_metrics"] = {"total_tokens": 0, "total_cost_usd": 0.0}
-            
-            return parsed_json
-            
-        except Exception as e:
-            print(f"[MAF ERROR] Patient Extraction failed: {e}")
-            return {"error": str(e), "diagnoses": [], "procedures": [], "llm_metrics": {}}
+            try:
+                # 1. Extraction
+                result = await self.agent.run(prompt)
+                result_str = str(result)
+                if result_str.startswith("```json"):
+                    result_str = result_str.strip("```json").strip("```").strip()
+                parsed_json = json.loads(result_str)
+                
+                # 2. Validation
+                validation_prompt = f"{context_prompt}\n\n--- Extracted Data to Audit ---\n{json.dumps(parsed_json, indent=2)}"
+                val_result = await self.validation_agent.run(validation_prompt)
+                val_str = str(val_result)
+                if val_str.startswith("```json"):
+                    val_str = val_str.strip("```json").strip("```").strip()
+                val_json = json.loads(val_str)
+                
+                if val_json.get("status") == "PASS" or attempt == max_attempts:
+                    parsed_json["llm_metrics"] = {"total_tokens": 0, "total_cost_usd": 0.0}
+                    parsed_json["audit_status"] = val_json.get("status", "PASS")
+                    parsed_json["audit_feedback"] = val_json.get("feedback")
+                    return parsed_json
+                else:
+                    feedback = val_json.get("feedback", "Fix hallucinations.")
+                    
+            except Exception as e:
+                print(f"[MAF ERROR] Patient Extraction failed: {e}")
+                return {"error": str(e), "diagnoses": [], "procedures": [], "llm_metrics": {}}
+                
+        return {"diagnoses": [], "procedures": []}
