@@ -1,9 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import uvicorn
 import json
+import time
+import os
 from config import Config
 from azure_blob_handler import AzureBlobHandler
 from azure_doc_intelligence_processor import AzureDocIntelligenceProcessor
@@ -14,6 +16,7 @@ from reasoning_agent import PriorAuthReasoningAgent
 from chat_agent import ChatAgent
 from azure_kb_indexer import AzureKBIndexer
 from openai import AzureOpenAI
+import database
 
 app = FastAPI(title="Prior Auth Decision Engine API")
 
@@ -30,6 +33,9 @@ async def add_no_cache_headers(request, call_next):
 # Initialize shared resources
 if not Config.validate_all():
     raise RuntimeError("Missing configuration.")
+
+# Initialize Local Database for State Management
+database.init_db()
 
 blob_handler = AzureBlobHandler(Config.AZURE_STORAGE_CONNECTION_STRING)
 doc_intel = AzureDocIntelligenceProcessor(Config.AZURE_DOC_INTEL_ENDPOINT, Config.AZURE_DOC_INTEL_KEY)
@@ -63,85 +69,116 @@ patient_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KE
 policy_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_POLICY)
 
 
+async def background_process_patient(patient_id: str, file_bytes: bytes, filename: str):
+    print(f"[BACKGROUND] Processing Patient {patient_id}...")
+    blob_name = f"patient_{patient_id}_{filename}"
+    
+    # Upload to Azure Blob Storage
+    blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name, file_bytes)
+    
+    # Generate SAS URL for Document Intelligence
+    sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name)
+    
+    # 1. OCR
+    doc_result = doc_intel.process_pdf_url(sas_url, filename)
+    all_text = doc_result["full_content"]
+    
+    # 2. PHI Masking
+    scrubbed_text = phi_masker.mask_text(all_text)
+    
+    # 3. Entity Extraction (Async Chunked)
+    entities = await patient_agent.extract(scrubbed_text)
+    
+    # 4. Save to Local DB
+    database.save_patient(patient_id, scrubbed_text, entities)
+    
+    # 5. Save to Azure AI Search (Voice Bot RAG)
+    patient_kb.index_document(doc_id=patient_id, text_content=scrubbed_text, entities=entities)
+    print(f"[BACKGROUND] Patient {patient_id} processed successfully.")
+
+
 @app.post("/upload/patient")
 async def process_patient_pdf(
+    background_tasks: BackgroundTasks,
     patient_id: str = Form(...),
     files: list[UploadFile] = File(...)
 ):
-    start_time = time.time()
-    all_text = ""
-    all_ocr_polygons = []
-    all_confidences = []
-    for file in files:
-        temp_pdf = f"temp_{file.filename}"
-        with open(temp_pdf, "wb") as f:
-            f.write(await file.read())
-        
-        # 1. OCR (with Page Numbers and Bounding Boxes)
-        doc_result = doc_intel.process_pdf_url(temp_pdf, file.filename)
-        all_text += doc_result["full_content"] + "\n\n"
-        all_ocr_polygons.extend(doc_result.get("ocr_polygons", []))
-        all_confidences.append(doc_result.get("ocr_confidence_score", 99.0))
-        
-    avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 99.0
-        
-    # 2. PHI Masking
-    scrubbed_text = phi_masker.mask_phi(all_text)
-    
-    # 3. Entity Extraction (Diagnoses, Procedures, Citations)
-    entities = await patient_agent.extract(scrubbed_text)
-    
-    # Inject OCR metrics for downstream reasoning and UI
-    entities["ocr_polygons"] = all_ocr_polygons
-    entities["ocr_confidence_score"] = avg_confidence
-    
-    # 4. Save to Azure AI Search
-    kb_indexer.index_document(doc_id=patient_id, text_content=scrubbed_text, entities=entities)
-    
-    latency = round(time.time() - start_time, 2)
-    return {"status": "success", "patient_id": patient_id, "entities": entities, "processing_time_seconds": latency, "ocr_confidence_score": avg_confidence}
-
-@app.post("/upload/policy")
-async def upload_policy(policy_id: str = Form(...), file: UploadFile = File(...)):
-    start_time = time.time()
+    # Just take the first file for simplicity
+    file = files[0]
     file_bytes = await file.read()
-    blob_name = f"{policy_id}_{file.filename}"
+    
+    # Queue the heavy processing in the background so UI doesn't timeout
+    background_tasks.add_task(background_process_patient, patient_id, file_bytes, file.filename)
+    
+    return {"status": "processing", "message": "Patient data is processing in the background.", "patient_id": patient_id}
+
+
+async def background_process_policy(policy_id: str, file_bytes: bytes, filename: str):
+    print(f"[BACKGROUND] Processing Policy {policy_id}...")
+    blob_name = f"{policy_id}_{filename}"
     blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_POLICY, blob_name, file_bytes)
     
     sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_POLICY, blob_name)
     doc_result = doc_intel.process_pdf_url(sas_url, blob_name)
     raw_text = doc_result["full_content"]
-    ocr_confidence = doc_result.get("ocr_confidence_score", 99.0)
     
     entities = await policy_agent.extract(raw_text)
-    entities["ocr_confidence_score"] = ocr_confidence
-    policy_kb.index_document(policy_id, raw_text, entities)
     
-    latency = round(time.time() - start_time, 2)
-    return {"status": "success", "policy_id": policy_id, "entities": entities, "processing_time_seconds": latency, "ocr_confidence_score": ocr_confidence}
+    # Save to Local DB
+    database.save_policy(policy_id, raw_text, entities)
+    
+    # Save to Azure AI Search
+    policy_kb.index_document(policy_id, raw_text, entities)
+    print(f"[BACKGROUND] Policy {policy_id} processed successfully.")
+
+
+@app.post("/upload/policy")
+async def upload_policy(background_tasks: BackgroundTasks, policy_id: str = Form(...), file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    background_tasks.add_task(background_process_policy, policy_id, file_bytes, file.filename)
+    
+    return {"status": "processing", "message": "Policy is processing in the background.", "policy_id": policy_id}
+
+
+@app.get("/api/patients/{patient_id}")
+async def get_patient_data(patient_id: str):
+    data = database.get_patient(patient_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Patient not found in DB.")
+    return {"status": "success", "data": data}
+
+@app.get("/api/policies/{policy_id}")
+async def get_policy_data(policy_id: str):
+    data = database.get_policy(policy_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Policy not found in DB.")
+    return {"status": "success", "data": data}
+
 
 @app.post("/evaluate")
 async def evaluate_prior_auth(patient_id: str, policy_id: str, target_cpt: str, human_feedback: str = None):
     start_time = time.time()
-    patient_doc = patient_kb.get_document(patient_id)
-    policy_doc = policy_kb.get_document(policy_id)
+    
+    # Fetch from fast local DB instead of Azure Search!
+    patient_doc = database.get_patient(patient_id)
+    policy_doc = database.get_policy(policy_id)
     
     if not patient_doc or not policy_doc:
-        raise HTTPException(status_code=404, detail="Document not found in KB.")
+        raise HTTPException(status_code=404, detail="Document not found in DB. Still processing?")
         
-    patient_data = patient_doc.get("entities_metadata", "")
-    policy_data = policy_doc.get("entities_metadata", "")
-    
-    if not isinstance(patient_data, str) or not patient_data.startswith("{"):
-        patient_data = json.dumps(patient_data)
-        
-    if not isinstance(policy_data, str) or not policy_data.startswith("{"):
-        policy_data = json.dumps(policy_data)
+    patient_data = json.dumps(patient_doc["entities"])
+    policy_data = json.dumps(policy_doc["entities"])
     
     decision = await reasoning_agent.evaluate(patient_data, policy_data, target_cpt, human_feedback)
     
     latency = round(time.time() - start_time, 2)
     decision["processing_time_seconds"] = latency
+    
+    # Save decision to state DB
+    request_id = f"REQ_{patient_id}_{policy_id}"
+    database.create_auth_request(request_id, patient_id, policy_id, target_cpt)
+    database.update_auth_request(request_id, "COMPLETED", decision)
+    
     return {"decision": decision}
 
 from pydantic import BaseModel
@@ -152,14 +189,11 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat_assistant(request: ChatRequest):
-    patient_doc = patient_kb.get_document(request.patient_id)
-    policy_doc = policy_kb.get_document(request.policy_id)
+    patient_doc = database.get_patient(request.patient_id)
+    policy_doc = database.get_policy(request.policy_id)
     
-    patient_data = patient_doc.get("entities_metadata", "") if patient_doc else "No patient data found."
-    policy_data = policy_doc.get("entities_metadata", "") if policy_doc else "No policy data found."
-    
-    if not isinstance(patient_data, str): patient_data = json.dumps(patient_data)
-    if not isinstance(policy_data, str): policy_data = json.dumps(policy_data)
+    patient_data = json.dumps(patient_doc["entities"]) if patient_doc else "No patient data found."
+    policy_data = json.dumps(policy_doc["entities"]) if policy_doc else "No policy data found."
     
     response = await chat_agent.answer_question(request.query, patient_data, policy_data)
     return {"response": response}
@@ -195,6 +229,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         print(f"[AUDIO ERROR] {e}")
         return {"text": "", "error": str(e)}
 
+import os
 from fastapi.responses import FileResponse
 
 @app.get("/")

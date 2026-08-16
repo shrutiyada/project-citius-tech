@@ -1,6 +1,5 @@
 import json
 import os
-from difflib import SequenceMatcher
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from azure.identity.aio import DefaultAzureCredential
@@ -18,12 +17,13 @@ class PriorAuthReasoningAgent:
         
         # 1. Reasoning Prompt
         self.reasoning_sys_msg = (
-            "You are a Medical Director conducting a strict prior authorization review. "
+            "You are a strict prior authorization reviewer. "
             "You will evaluate if the patient meets the medical necessity criteria. "
-            "⚠️ CRITICAL INSTRUCTION: When extracting the 'criterion', you must pick complex, formal clinical thresholds from the Policy Data (e.g. 'Must have 6 months of conservative therapy', 'BMI > 35'). Ignore mundane administrative lines. "
-            "⚠️ CRITICAL INSTRUCTION: When extracting 'evidence', you MUST quote the exact, verbatim text strictly from the PATIENT DATA that proves or disproves the criterion. DO NOT just copy the policy criterion. DO NOT paraphrase. DO NOT invent text. "
+            "⚠️ CRITICAL INSTRUCTION: Your 'reasoning' MUST be written in plain, simple 5th-grade English. DO NOT use dense medical jargon. Use a clear, short bulleted list summarizing why the patient was approved or denied.\n"
+            "⚠️ CRITICAL INSTRUCTION: When extracting the 'criterion', pick formal clinical thresholds from the Policy Data. "
+            "⚠️ CRITICAL INSTRUCTION: When extracting 'evidence', you MUST quote the exact, verbatim text strictly from the PATIENT DATA that proves or disproves the criterion. DO NOT paraphrase. "
             "You MUST output valid JSON only matching this exact structure: "
-            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': 'summary string', 'criteria_matrix': [{'criterion': 'complex clinical threshold from policy', 'evidence': 'exact verbatim quote strictly from patient data', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
+            "{'decision': 'APPROVE/DENY/PEND', 'reasoning': '- Bullet 1\\n- Bullet 2', 'criteria_matrix': [{'criterion': 'policy threshold', 'evidence': 'exact verbatim patient quote', 'met': 'Yes/No', 'citation': '[Page X]'}]}"
         )
         self.reasoning_agent = Agent(client=self.client, instructions=self.reasoning_sys_msg)
         
@@ -55,17 +55,6 @@ class PriorAuthReasoningAgent:
         return json.loads(result_str)
 
     async def evaluate(self, patient_data: str, policy_data: str, target_cpt: str, human_feedback: str = None) -> dict:
-        import json
-        
-        # 1. Extract and strip OCR polygons from patient_data to save tokens
-        ocr_polygons = []
-        try:
-            patient_dict = json.loads(patient_data)
-            ocr_polygons = patient_dict.pop("ocr_polygons", [])
-            patient_data = json.dumps(patient_dict)
-        except Exception:
-            pass
-
         if not target_cpt:
             print("[MAF] Target CPT missing. Attempting to auto-deduce from Patient Data...")
             try:
@@ -122,38 +111,6 @@ class PriorAuthReasoningAgent:
                         "precision": critique_json.get("precision_score", 90),
                         "recall": critique_json.get("recall_score", 90)
                     }
-                    
-                    # True Bounding Box Algorithm Integration
-                    if "criteria_matrix" in decision_json:
-                        for row in decision_json["criteria_matrix"]:
-                            evidence_str = row.get("evidence", "")
-                            if evidence_str and evidence_str.strip():
-                                best_box = None
-                                best_ratio = 0.0
-                                evidence_lower = evidence_str.lower()
-                                
-                                for poly in ocr_polygons:
-                                    poly_text = poly.get("text", "").lower()
-                                    # Exact substring match
-                                    if poly_text in evidence_lower or evidence_lower in poly_text:
-                                        ratio = 1.0
-                                    else:
-                                        # Fuzzy match overlap
-                                        matcher = SequenceMatcher(None, evidence_lower, poly_text)
-                                        ratio = matcher.quick_ratio()
-                                        
-                                    if ratio > best_ratio and ratio > 0.4:
-                                        best_ratio = ratio
-                                        p = poly.get("polygon", [])
-                                        if len(p) >= 8:
-                                            best_box = f"[{p[0]}, {p[1]}, {p[4]}, {p[5]}]"
-                                        else:
-                                            best_box = str(p)
-                                            
-                                row["bounding_box"] = best_box
-                            else:
-                                row["bounding_box"] = None
-                                
                     return decision_json
                 else:
                     print("[MAF CRITIQUE AGENT] Logic rejected. Sending back to Reasoning Agent...")
