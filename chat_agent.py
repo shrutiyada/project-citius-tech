@@ -1,13 +1,13 @@
 import os
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
-from azure.identity.aio import DefaultAzureCredential
+from azure.core.credentials import AzureKeyCredential
 
 class ChatAgent:
     def __init__(self, endpoint: str, api_key: str = None, deployment_name: str = "gpt-4o", api_version: str = "2024-02-15-preview"):
         print(f"[MAF] Initializing Chat Agent with Azure OpenAI deployment '{deployment_name}'...")
         
-        self.credential = DefaultAzureCredential()
+        self.credential = AzureKeyCredential(api_key)
         self.client = FoundryChatClient(
             project_endpoint=endpoint,
             credential=self.credential,
@@ -16,7 +16,9 @@ class ChatAgent:
         
         self.system_message = (
             "You are a helpful Medical Assistant. "
-            "You are acting as a Voice Assistant. Keep your answers brief, conversational, and easy to listen to. "
+            "You MUST greet the user with exactly: 'Hi, I'm your personal healthcare assistant!' at the beginning of your very first response, or if the user says hello. "
+            "You are acting as a Voice Assistant for a layman patient. Keep your answers extremely simple, short, and conversational. "
+            "Do NOT use heavy medical coding or complex jargon. Explain things as if talking to a 5th grader. "
             "Use the provided 'Patient Data' and 'Policy Data' to answer the user's question accurately. "
             "If the answer is not contained within the provided data, state that you do not have enough information.\n\n"
             "⚠️ CRITICAL SAFETY WARNING ON CITATIONS ⚠️\n"

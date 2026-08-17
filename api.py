@@ -146,12 +146,20 @@ async def upload_policy(background_tasks: BackgroundTasks, policy_id: str = Form
     return {"status": "processing", "message": "Policy is processing in the background.", "policy_id": policy_id}
 
 
+@app.get("/api/patients")
+async def get_all_patients():
+    return {"status": "success", "data": database.get_all_patients()}
+
 @app.get("/api/patients/{patient_id}")
 async def get_patient_data(patient_id: str):
     data = database.get_patient(patient_id)
     if not data:
         raise HTTPException(status_code=404, detail="Patient not found in DB.")
     return {"status": "success", "data": data}
+
+@app.get("/api/policies")
+async def get_all_policies():
+    return {"status": "success", "data": database.get_all_policies()}
 
 @app.get("/api/policies/{policy_id}")
 async def get_policy_data(policy_id: str):
