@@ -9,25 +9,25 @@ class ChatAgent:
         
         self.credential = DefaultAzureCredential()
         self.client = FoundryChatClient(
-            endpoint=endpoint,
+            project_endpoint=endpoint,
             credential=self.credential,
-            deployment_name=deployment_name,
-            api_version=api_version
+            model=deployment_name
         )
         
         self.system_message = (
             "You are a helpful Medical Assistant. "
+            "You are acting as a Voice Assistant. Keep your answers brief, conversational, and easy to listen to. "
             "Use the provided 'Patient Data' and 'Policy Data' to answer the user's question accurately. "
             "If the answer is not contained within the provided data, state that you do not have enough information.\n\n"
             "⚠️ CRITICAL SAFETY WARNING ON CITATIONS ⚠️\n"
-            "When answering questions, you MUST cite the exact [Page X] from the context data for every claim you make.\n"
+            "When answering questions, you MUST verbally cite the exact [Page X] from the context data for every claim you make (e.g. 'According to page 4...').\n"
             "DO NOT guess or invent page numbers. You must locate the exact [Page X] marker that immediately precedes the text you are quoting.\n"
             "Failure to provide accurate citations is a critical safety violation."
         )
         
         self.agent = Agent(
             client=self.client,
-            system_message=self.system_message
+            instructions=self.system_message
         )
 
     async def answer_question(self, query: str, patient_data: str, policy_data: str) -> str:

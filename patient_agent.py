@@ -34,70 +34,33 @@ class PatientEntityAgent:
         
         self.agent = Agent(client=self.client, instructions=self.system_message)
 
-        self.validation_sys_msg = (
-            "You are a Senior Medical Auditor validating extracted data. "
-            "Review the extracted JSON against the provided Patient Record chunk. "
-            "1. Ensure no diagnoses or procedures were hallucinated. "
-            "2. Ensure EVERY citation explicitly matches a [Page X] marker that actually exists in the text. "
-            "If the extraction is 100% accurate, output 'PASS'. "
-            "If there are errors or hallucinations, output 'FAIL' along with specific feedback on what to fix. "
-            "You MUST output valid JSON only matching this structure: {'status': 'PASS/FAIL', 'feedback': 'string'}"
-        )
-        self.validation_agent = Agent(client=self.client, instructions=self.validation_sys_msg)
-
     async def _extract_chunk(self, chunk_text: str, chunk_index: int) -> dict:
         context_prompt = f"Patient Record Chunk {chunk_index}:\n{chunk_text}"
-        max_attempts = 2
-        feedback = ""
-        
-        for attempt in range(1, max_attempts + 1):
-            prompt = context_prompt
-            if feedback:
-                prompt += f"\n\n[PREVIOUS VALIDATION FEEDBACK TO FIX]: {feedback}"
-                
-            try:
-                result = await self.agent.run(prompt)
-                result_str = str(result)
-                if result_str.startswith("```json"):
-                    result_str = result_str.strip("```json").strip("```").strip()
-                parsed_json = json.loads(result_str)
-                
-                validation_prompt = f"{context_prompt}\n\n--- Extracted Data to Audit ---\n{json.dumps(parsed_json, indent=2)}"
-                val_result = await self.validation_agent.run(validation_prompt)
-                val_str = str(val_result)
-                if val_str.startswith("```json"):
-                    val_str = val_str.strip("```json").strip("```").strip()
-                val_json = json.loads(val_str)
-                
-                if val_json.get("status") == "PASS" or attempt == max_attempts:
-                    parsed_json["audit_status"] = val_json.get("status", "PASS")
-                    parsed_json["audit_feedback"] = val_json.get("feedback")
-                    return parsed_json
-                else:
-                    feedback = val_json.get("feedback", "Fix hallucinations.")
-                    
-            except Exception as e:
-                print(f"[MAF ERROR] Chunk {chunk_index} failed: {e}")
-                return {"diagnoses": [], "procedures": [], "audit_status": "FAIL", "audit_feedback": str(e)}
-                
-        return {"diagnoses": [], "procedures": [], "audit_status": "FAIL"}
+        try:
+            result = await self.agent.run(context_prompt)
+            result_str = str(result)
+            if result_str.startswith("```json"):
+                result_str = result_str.strip("```json").strip("```").strip()
+            parsed_json = json.loads(result_str)
+            return parsed_json
+        except Exception as e:
+            print(f"[MAF ERROR] Chunk {chunk_index} failed: {e}")
+            return {"diagnoses": [], "procedures": []}
 
     async def extract(self, text: str) -> dict:
         if not text.strip():
-            return {"diagnoses": [], "procedures": [], "audit_status": "PASS"}
+            return {"diagnoses": [], "procedures": []}
             
         chunk_size = 6000
         chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
         
-        print(f"[MAF] Splitting Patient Record into {len(chunks)} parallel chunks...")
+        print(f"[MAF] Splitting Patient Record into {len(chunks)} parallel chunks (No Chunk Validation)...")
         tasks = [self._extract_chunk(chunk, i) for i, chunk in enumerate(chunks)]
         results = await asyncio.gather(*tasks)
         
-        merged = {"diagnoses": [], "procedures": [], "audit_status": "PASS"}
+        merged = {"diagnoses": [], "procedures": []}
         for r in results:
             merged["diagnoses"].extend(r.get("diagnoses", []))
             merged["procedures"].extend(r.get("procedures", []))
-            if r.get("audit_status") == "FAIL":
-                merged["audit_status"] = "FAIL"
                 
         return merged

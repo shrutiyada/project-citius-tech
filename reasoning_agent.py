@@ -101,14 +101,17 @@ class PriorAuthReasoningAgent:
                 print("[MAF CRITIQUE AGENT] Auditing decision...")
                 critique_json = await self._safe_run(self.critique_agent, critique_prompt)
                 
-                # Check status
                 if critique_json.get("status") == "PASS" or attempt == max_attempts:
-                    decision_json["audit_status"] = critique_json.get("status", "PASS")
-                    decision_json["audit_feedback"] = critique_json.get("critique_feedback")
+                    f_score = critique_json.get("faithfulness_score", 90)
+                    r_score = critique_json.get("relevance_score", 90)
+                    p_score = critique_json.get("precision_score", 90)
+                    avg_score = round((f_score + r_score + p_score) / 3.0)
+                    
+                    decision_json["confidence_score"] = f"{avg_score}%"
                     decision_json["ragas_metrics"] = {
-                        "faithfulness": critique_json.get("faithfulness_score", 90),
-                        "relevance": critique_json.get("relevance_score", 90),
-                        "precision": critique_json.get("precision_score", 90),
+                        "faithfulness": f_score,
+                        "relevance": r_score,
+                        "precision": p_score,
                         "recall": critique_json.get("recall_score", 90)
                     }
                     return decision_json

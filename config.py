@@ -44,8 +44,6 @@ class Config:
         if not cls.AZURE_OPENAI_DEPLOYMENT_NAME: missing.append("AZURE_OPENAI_DEPLOYMENT_NAME")
         if not cls.AZURE_SEARCH_ENDPOINT: missing.append("AZURE_SEARCH_ENDPOINT")
         if not cls.AZURE_SEARCH_KEY: missing.append("AZURE_SEARCH_KEY")
-        if not cls.AZURE_LANGUAGE_ENDPOINT: missing.append("AZURE_LANGUAGE_ENDPOINT")
-        if not cls.AZURE_LANGUAGE_KEY: missing.append("AZURE_LANGUAGE_KEY")
         
         if missing:
             print(f"[FATAL] Missing required environment variables:\n - " + "\n - ".join(missing))

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Upload, FileText, CheckCircle, XCircle, Clock, Activity, MessageSquare, Mic, Search, ChevronRight, BarChart2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, XCircle, Clock, Activity, MessageSquare, Mic, Search, ChevronRight, BarChart2, Eye, EyeOff } from 'lucide-react';
 
 const API_URL = '';
 
@@ -17,6 +17,10 @@ function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [chatInput, setChatInput] = useState('');
   
+  // UI States
+  const [showPatientData, setShowPatientData] = useState(false);
+  const [showPolicyData, setShowPolicyData] = useState(false);
+  
   // Loading States
   const [loadingPatient, setLoadingPatient] = useState(false);
   const [loadingPolicy, setLoadingPolicy] = useState(false);
@@ -28,7 +32,7 @@ function App() {
   const [recognition, setRecognition] = useState(null);
 
   useEffect(() => {
-    if ('webkitSpeechRecognition' in window) {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       const rec = new SpeechRecognition();
       rec.continuous = false;
@@ -36,6 +40,16 @@ function App() {
       setRecognition(rec);
     }
   }, []);
+
+  const speak = (text) => {
+    if ('speechSynthesis' in window) {
+      // stop any currently playing speech
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      // Optional: change voice or rate here if needed
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   const handleVoiceInput = (setInputState) => {
     if (!recognition) {
@@ -68,12 +82,27 @@ function App() {
     const formData = new FormData(e.target);
     try {
       const res = await axios.post(`${API_URL}/upload/patient`, formData);
-      setPatientEntities(res.data);
+      setPatientEntities(res.data); // Shows processing
+      
+      // Poll for background completion
+      const poll = setInterval(async () => {
+        try {
+          const pollRes = await axios.get(`${API_URL}/api/patients/${patientId}`);
+          if (pollRes.data.status === "success" && pollRes.data.data.entities) {
+             setPatientEntities(pollRes.data.data);
+             setLoadingPatient(false);
+             clearInterval(poll);
+          }
+        } catch (err) {
+          // Still processing, ignore 404
+        }
+      }, 2000);
+
     } catch (err) {
       console.error(err);
       alert('Failed to upload patient data');
+      setLoadingPatient(false);
     }
-    setLoadingPatient(false);
   };
 
   const handlePolicyUpload = async (e) => {
@@ -83,11 +112,26 @@ function App() {
     try {
       const res = await axios.post(`${API_URL}/upload/policy`, formData);
       setPolicyEntities(res.data);
+      
+      // Poll for background completion
+      const poll = setInterval(async () => {
+        try {
+          const pollRes = await axios.get(`${API_URL}/api/policies/${policyId}`);
+          if (pollRes.data.status === "success" && pollRes.data.data.entities) {
+             setPolicyEntities(pollRes.data.data);
+             setLoadingPolicy(false);
+             clearInterval(poll);
+          }
+        } catch (err) {
+          // Still processing, ignore 404
+        }
+      }, 2000);
+
     } catch (err) {
       console.error(err);
       alert('Failed to upload policy data');
+      setLoadingPolicy(false);
     }
-    setLoadingPolicy(false);
   };
 
   const handleEvaluate = async (humanFeedback = null) => {
@@ -121,7 +165,11 @@ function App() {
         patient_id: patientId,
         policy_id: policyId
       });
-      setChatHistory(prev => [...prev, { sender: 'bot', text: res.data.response }]);
+      const botResponse = res.data.response;
+      setChatHistory(prev => [...prev, { sender: 'bot', text: botResponse }]);
+      
+      // Auto-read response aloud for voice bot functionality
+      speak(botResponse);
     } catch (err) {
       console.error(err);
       setChatHistory(prev => [...prev, { sender: 'bot', text: 'Error communicating with AI.' }]);
@@ -166,18 +214,23 @@ function App() {
               <input type="text" name="patient_id" className="input-field" value={patientId} onChange={e => setPatientId(e.target.value)} required />
               <input type="file" name="files" multiple className="input-field" required accept="application/pdf" />
               <button type="submit" className="btn btn-primary" disabled={loadingPatient}>
-                {loadingPatient ? <div className="spinner"></div> : 'Upload & Extract Data'}
+                {loadingPatient ? <div className="spinner spinner-white"></div> : 'Upload & Extract Data'}
               </button>
             </form>
             
             {patientEntities && (
               <div style={{ marginTop: '24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <span className="badge success">Extraction Complete</span>
+                  <button type="button" className="btn btn-outline" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => setShowPatientData(!showPatientData)}>
+                    {showPatientData ? <><EyeOff size={14}/> Hide Data</> : <><Eye size={14}/> View Extracted Evidence</>}
+                  </button>
                 </div>
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px', maxHeight: '200px', overflowY: 'auto' }}>
-                  <pre style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{JSON.stringify(patientEntities.entities, null, 2)}</pre>
-                </div>
+                {showPatientData && (
+                  <div style={{ background: '#f1f5f9', padding: '12px', borderRadius: '8px', maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border)' }}>
+                    <pre style={{ fontSize: '12px', color: 'var(--text-main)' }}>{JSON.stringify(patientEntities.entities || patientEntities, null, 2)}</pre>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -191,18 +244,23 @@ function App() {
               <input type="text" name="policy_id" className="input-field" value={policyId} onChange={e => setPolicyId(e.target.value)} required />
               <input type="file" name="file" className="input-field" required accept="application/pdf" />
               <button type="submit" className="btn btn-primary" disabled={loadingPolicy}>
-                {loadingPolicy ? <div className="spinner"></div> : 'Upload & Extract Policy'}
+                {loadingPolicy ? <div className="spinner spinner-white"></div> : 'Upload & Extract Policy'}
               </button>
             </form>
             
             {policyEntities && (
               <div style={{ marginTop: '24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <span className="badge success">Extraction Complete</span>
+                  <button type="button" className="btn btn-outline" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => setShowPolicyData(!showPolicyData)}>
+                    {showPolicyData ? <><EyeOff size={14}/> Hide Data</> : <><Eye size={14}/> View Extracted Evidence</>}
+                  </button>
                 </div>
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px', maxHeight: '200px', overflowY: 'auto' }}>
-                  <pre style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{JSON.stringify(policyEntities.entities, null, 2)}</pre>
-                </div>
+                {showPolicyData && (
+                  <div style={{ background: '#f1f5f9', padding: '12px', borderRadius: '8px', maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border)' }}>
+                    <pre style={{ fontSize: '12px', color: 'var(--text-main)' }}>{JSON.stringify(policyEntities.entities || policyEntities, null, 2)}</pre>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -214,7 +272,7 @@ function App() {
                <div style={{ display: 'flex', gap: '16px', justifyContent: 'center' }}>
                  <input type="text" placeholder="Requested CPT (Optional, AI will auto-deduce if empty)" className="input-field" style={{ maxWidth: '400px' }} value={targetCpt} onChange={e => setTargetCpt(e.target.value)} />
                  <button className="btn btn-primary" onClick={() => handleEvaluate()} disabled={loadingEval}>
-                   {loadingEval ? <div className="spinner"></div> : 'Evaluate Medical Necessity'}
+                   {loadingEval ? <div className="spinner spinner-white"></div> : 'Evaluate Medical Necessity'}
                  </button>
                </div>
              </div>
@@ -227,42 +285,23 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <h2 className="gradient-text"><BarChart2 /> System Telemetry & RAGAS Metrics</h2>
             
-            <div className="grid-2">
-                <div className="glass-panel">
-                    <h3>Patient Agent Pipeline</h3>
-                    <ul style={{ marginTop: '16px', lineHeight: '2' }}>
-                        <li>Latency: <span className="badge info">{patientEntities?.processing_time_seconds || 0}s</span></li>
-                        <li>OCR Confidence: <span className="badge success">{patientEntities?.ocr_confidence_score || 'N/A'}%</span></li>
-                        <li>Status: {patientEntities ? '✅ Complete' : '⏳ Pending'}</li>
-                    </ul>
-                </div>
-                <div className="glass-panel">
-                    <h3>Policy Agent Pipeline</h3>
-                    <ul style={{ marginTop: '16px', lineHeight: '2' }}>
-                        <li>Latency: <span className="badge info">{policyEntities?.processing_time_seconds || 0}s</span></li>
-                        <li>OCR Confidence: <span className="badge success">{policyEntities?.ocr_confidence_score || 'N/A'}%</span></li>
-                        <li>Status: {policyEntities ? '✅ Complete' : '⏳ Pending'}</li>
-                    </ul>
-                </div>
-            </div>
-
             <div className="glass-panel">
                 <h3>Reasoning Engine RAGAS Scores</h3>
                 {evaluation ? (
                     <div className="grid-4" style={{ marginTop: '16px' }}>
-                        <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                        <div style={{ textAlign: 'center', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)' }}>
                             <p style={{ color: 'var(--text-muted)' }}>Faithfulness</p>
                             <h2>{evaluation.ragas_metrics?.faithfulness}%</h2>
                         </div>
-                        <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                        <div style={{ textAlign: 'center', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)' }}>
                             <p style={{ color: 'var(--text-muted)' }}>Context Relevance</p>
                             <h2>{evaluation.ragas_metrics?.relevance}%</h2>
                         </div>
-                        <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                        <div style={{ textAlign: 'center', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)' }}>
                             <p style={{ color: 'var(--text-muted)' }}>Precision</p>
                             <h2>{evaluation.ragas_metrics?.precision}%</h2>
                         </div>
-                        <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                        <div style={{ textAlign: 'center', padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)' }}>
                             <p style={{ color: 'var(--text-muted)' }}>Recall</p>
                             <h2>{evaluation.ragas_metrics?.recall}%</h2>
                         </div>
@@ -290,14 +329,14 @@ function App() {
                   <h2 className={`gradient-text`} style={{ fontSize: '32px', margin: '8px 0' }}>{evaluation.decision}</h2>
                 </div>
                 <div className="glass-panel" style={{ textAlign: 'center' }}>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>AI Confidence (Audit)</p>
-                  <h2 style={{ fontSize: '32px', margin: '8px 0', color: evaluation.audit_status === 'PASS' ? 'var(--success)' : 'var(--warning)' }}>
-                    {evaluation.audit_status}
+                  <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>AI Confidence Score</p>
+                  <h2 style={{ fontSize: '32px', margin: '8px 0', color: evaluation.confidence_score ? 'var(--success)' : 'var(--warning)' }}>
+                    {evaluation.confidence_score || evaluation.audit_status}
                   </h2>
                 </div>
                 <div className="glass-panel" style={{ textAlign: 'center', gridColumn: 'span 2' }}>
                   <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Medical Director Reasoning Summary</p>
-                  <p style={{ fontSize: '14px', margin: '8px 0', textAlign: 'left' }}>{evaluation.reasoning}</p>
+                  <p style={{ fontSize: '14px', margin: '8px 0', textAlign: 'left', whiteSpace: 'pre-wrap' }}>{evaluation.reasoning}</p>
                 </div>
               </div>
               
@@ -308,10 +347,9 @@ function App() {
                   <thead>
                     <tr>
                       <th style={{ width: '30%' }}>Policy Criterion</th>
-                      <th style={{ width: '30%' }}>Patient Evidence</th>
+                      <th style={{ width: '40%' }}>Patient Evidence</th>
                       <th style={{ width: '10%' }}>Met?</th>
-                      <th style={{ width: '15%' }}>Citation</th>
-                      <th style={{ width: '15%' }}>Bounding Box</th>
+                      <th style={{ width: '20%' }}>Citation</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -326,9 +364,6 @@ function App() {
                         </td>
                         <td>
                           {row.citation && <span className="badge info">{row.citation}</span>}
-                        </td>
-                        <td>
-                          {row.bounding_box ? <span style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--primary)' }}><Search size={10}/> {row.bounding_box}</span> : '-'}
                         </td>
                       </tr>
                     ))}
@@ -358,12 +393,12 @@ function App() {
       {activeTab === 'chat' && (
         <div className="glass-panel chat-window">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
-            <MessageSquare size={18} /> Medical Assistant
+            <MessageSquare size={18} /> Medical Assistant (Voice Bot)
           </h3>
           <div className="chat-messages">
             {chatHistory.length === 0 && (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '40px' }}>
-                Ask a question about Patient {patientId} or Policy {policyId}...
+                Ask a question about Patient {patientId} or Policy {policyId}... (Audio response enabled)
               </div>
             )}
             {chatHistory.map((msg, idx) => (
@@ -371,13 +406,13 @@ function App() {
                 {msg.text}
               </div>
             ))}
-            {loadingChat && <div className="message bot"><div className="spinner" style={{ width: '16px', height: '16px' }}></div></div>}
+            {loadingChat && <div className="message bot"><div className="spinner spinner-white" style={{ width: '16px', height: '16px', borderTopColor: 'var(--primary)' }}></div></div>}
           </div>
           <form className="chat-input-area" onSubmit={handleChatSubmit}>
             <input 
               type="text" 
               className="input-field" 
-              placeholder="Type your medical query here..." 
+              placeholder="Type or speak your medical query here..." 
               value={chatInput} 
               onChange={e => setChatInput(e.target.value)} 
             />

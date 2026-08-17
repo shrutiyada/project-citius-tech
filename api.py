@@ -69,19 +69,24 @@ patient_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KE
 policy_kb = AzureKBIndexer(Config.AZURE_SEARCH_ENDPOINT, Config.AZURE_SEARCH_KEY, Config.AZURE_SEARCH_INDEX_POLICY)
 
 
-async def background_process_patient(patient_id: str, file_bytes: bytes, filename: str):
-    print(f"[BACKGROUND] Processing Patient {patient_id}...")
-    blob_name = f"patient_{patient_id}_{filename}"
+async def background_process_patient(patient_id: str, files_data: list):
+    print(f"[BACKGROUND] Processing Patient {patient_id} with {len(files_data)} files...")
     
-    # Upload to Azure Blob Storage
-    blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name, file_bytes)
-    
-    # Generate SAS URL for Document Intelligence
-    sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name)
-    
-    # 1. OCR
-    doc_result = doc_intel.process_pdf_url(sas_url, filename)
-    all_text = doc_result["full_content"]
+    all_text = ""
+    for idx, f in enumerate(files_data):
+        file_bytes = f["bytes"]
+        filename = f["filename"]
+        blob_name = f"patient_{patient_id}_{idx}_{filename}"
+        
+        # Upload to Azure Blob Storage
+        blob_handler.upload_blob(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name, file_bytes)
+        
+        # Generate SAS URL for Document Intelligence
+        sas_url = blob_handler.generate_sas_url(Config.AZURE_CONTAINER_NAME_PATIENT, blob_name)
+        
+        # 1. OCR
+        doc_result = doc_intel.process_pdf_url(sas_url, filename)
+        all_text += f"\n\n--- Document: {filename} ---\n\n" + doc_result["full_content"]
     
     # 2. PHI Masking
     scrubbed_text = phi_masker.mask_text(all_text)
@@ -103,14 +108,15 @@ async def process_patient_pdf(
     patient_id: str = Form(...),
     files: list[UploadFile] = File(...)
 ):
-    # Just take the first file for simplicity
-    file = files[0]
-    file_bytes = await file.read()
+    files_data = []
+    for file in files:
+        file_bytes = await file.read()
+        files_data.append({"bytes": file_bytes, "filename": file.filename})
     
     # Queue the heavy processing in the background so UI doesn't timeout
-    background_tasks.add_task(background_process_patient, patient_id, file_bytes, file.filename)
+    background_tasks.add_task(background_process_patient, patient_id, files_data)
     
-    return {"status": "processing", "message": "Patient data is processing in the background.", "patient_id": patient_id}
+    return {"status": "processing", "message": f"Processing {len(files_data)} PDFs in background.", "patient_id": patient_id}
 
 
 async def background_process_policy(policy_id: str, file_bytes: bytes, filename: str):
