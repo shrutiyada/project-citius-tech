@@ -2,13 +2,13 @@ import json
 import os
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
-from azure.identity.aio import DefaultAzureCredential
+from azure.core.credentials import AzureKeyCredential
 
 class PriorAuthReasoningAgent:
     def __init__(self, endpoint: str, api_key: str = None, deployment_name: str = "gpt-4o", api_version: str = "2024-02-15-preview"):
         print(f"[MAF] Initializing Reasoning & Critique Agent with Azure OpenAI deployment '{deployment_name}'...")
         
-        self.credential = DefaultAzureCredential()
+        self.credential = AzureKeyCredential(api_key)
         self.client = FoundryChatClient(
             project_endpoint=endpoint,
             credential=self.credential,
@@ -68,12 +68,12 @@ class PriorAuthReasoningAgent:
         context_payload = f"Target CPT: {target_cpt}\n\nPatient Data:\n{patient_data}\n\nPolicy Data:\n{policy_data}"
         
         if human_feedback:
-            print("[MAF] Human-in-the-loop override detected.")
-            reason_prompt = f"[CRITICAL OVERRIDE FROM HUMAN AUDITOR]: {human_feedback}\n\n{context_payload}"
+            print("[MAF] Human Feedback detected.")
+            reason_prompt = f"[HUMAN FEEDBACK/CORRECTION]: {human_feedback}\n\n{context_payload}"
             try:
                 decision_json = await self._safe_run(self.reasoning_agent, reason_prompt)
-                decision_json["audit_status"] = "MANUAL_OVERRIDE"
-                decision_json["audit_feedback"] = "Decision updated by human auditor."
+                decision_json["audit_status"] = "FEEDBACK_APPLIED"
+                decision_json["audit_feedback"] = "Decision updated based on user feedback."
                 return decision_json
             except Exception as e:
                 return {"decision": "ERROR", "error": str(e)}

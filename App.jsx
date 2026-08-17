@@ -22,7 +22,9 @@ function App() {
   const [patientEntities, setPatientEntities] = useState(null);
   const [policyEntities, setPolicyEntities] = useState(null);
   const [evaluation, setEvaluation] = useState(null);
-  const [chatHistory, setChatHistory] = useState([]);
+  const [chatHistory, setChatHistory] = useState([
+    { sender: 'bot', text: "Hi, I'm your personal healthcare assistant! How can I help you today?" }
+  ]);
   const [chatInput, setChatInput] = useState('');
   
   // UI States
@@ -529,12 +531,6 @@ function App() {
                 {msg.text}
               </div>
             ))}
-
-            {chatHistory.length === 0 && (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '40px' }}>
-                Ask a question about Patient {patientId} or Policy {policyId}... (Audio response enabled)
-              </div>
-            )}
           </div>
         </div>
       )}
