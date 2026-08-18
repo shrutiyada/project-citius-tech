@@ -25,10 +25,6 @@ class Config:
     # 5. Azure AI Language (PHI Masking)
     AZURE_LANGUAGE_ENDPOINT = os.getenv("AZURE_LANGUAGE_ENDPOINT", "")
     AZURE_LANGUAGE_KEY = os.getenv("AZURE_LANGUAGE_KEY", "")
-
-    # 6. Azure Cosmos DB
-    AZURE_COSMOS_ENDPOINT = os.getenv("AZURE_COSMOS_ENDPOINT", "")
-    AZURE_COSMOS_KEY = os.getenv("AZURE_COSMOS_KEY", "")
     
     # 4. Azure AI Search (Knowledge Base)
     AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT", "")
